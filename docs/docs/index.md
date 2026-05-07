@@ -1,16 +1,12 @@
 ---
-title: PROJECT_NAME Docs
+title: authkit Docs
 slug: /
-description: Starting point for PROJECT_NAME documentation.
+description: Documentation for the authkit Go authentication and authorization library.
 ---
 
-# PROJECT_NAME Docs
+# authkit Docs
 
-This site is the starting point for `PROJECT_NAME` documentation.
+authkit is a Go library for authentication and authorization in Web API services.
+The first implementation slice is intentionally small: prove the API-token path, then expand from real usage.
 
-Replace this page with:
-
-- `PROJECT_SUMMARY`
-- `QUICKSTART_STEPS`
-- `GUIDES_AND_REFERENCE_LINKS`
-- `SUPPORT_AND_CONTACT_PATHS`
+Start with the [working design](design.md) for the current architecture, package layout, and v0 prototype scope.

@@ -61,7 +61,7 @@ pnpm-debug.log*
 .svelte-kit/
 coverage/
 
-# Template repo outputs
+# Repository outputs
 docs/node_modules/
 docs/build/
 docs/.docusaurus/

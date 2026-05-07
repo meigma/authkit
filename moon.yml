@@ -1,18 +1,22 @@
-layer: 'scaffolding'
+language: 'go'
+layer: 'library'
+stack: 'backend'
+tags:
+  - 'auth'
+  - 'library'
 
 project:
-  title: 'Repository template'
-  description: 'Workspace-level configuration, shared automation, and template defaults.'
-  owner: 'REPLACE_ME_OWNER'
+  title: 'authkit'
+  description: 'Go authentication and authorization library for Web API services.'
+  owner: 'meigma'
   maintainers:
-    - 'REPLACE_ME_MAINTAINER'
+    - 'meigma'
 
 workspace:
   inheritedTasks:
     include: []
 
-# Add repository-wide maintenance tasks here as the template grows.
-# Examples:
+# Add repository-wide maintenance tasks here as authkit grows.
 #
 # tasks:
 #   format:

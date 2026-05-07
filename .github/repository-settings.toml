@@ -1,8 +1,8 @@
 # GitHub repository settings managed by scripts/configure_github_repo.py.
 #
 # Run:
-#   uv run scripts/configure_github_repo.py plan --repo OWNER/REPO
-#   uv run scripts/configure_github_repo.py apply --repo OWNER/REPO
+#   uv run scripts/configure_github_repo.py plan --repo meigma/authkit
+#   uv run scripts/configure_github_repo.py apply --repo meigma/authkit
 #
 # Notes:
 # - Supported settings are applied directly through the GitHub REST API.

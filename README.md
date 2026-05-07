@@ -1,61 +1,41 @@
-# PROJECT_NAME
+# authkit
 
-> Template note: replace every `ALL_CAPS` placeholder in this file before publishing or sharing the repository.
+authkit is an early-stage Go library for authentication and authorization in Web API services.
+It is intended to provide reusable request authentication, principal resolution, and authorization plumbing without becoming an identity provider or hosted login system.
 
-`PROJECT_NAME` is `PROJECT_SUMMARY`.
-It is intended for `PRIMARY_USE_CASE` and is maintained by `AUTHOR_NAME` or `ORGANIZATION_NAME`.
+The repository currently contains the project scaffold, documentation site, and working design for the first API-token prototype.
 
 ## Quick Start
 
-Replace this section with the shortest working path for a new user.
-
 ### Prerequisites
 
-- `REPLACE_ME_RUNTIME_OR_LANGUAGE`
-- `REPLACE_ME_REQUIRED_TOOLING`
-- `REPLACE_ME_EXTERNAL_DEPENDENCIES`
+- Node.js 22.22.2
+- npm
+- Moon 2.x
 
-### Install
-
-```sh
-REPLACE_ME_INSTALL_COMMAND
-```
-
-### Run
+### Check the repository
 
 ```sh
-REPLACE_ME_START_COMMAND
+moon ci --summary minimal
 ```
 
-## Usage
-
-Replace this section with the most common workflow for the repository.
+### Work on the docs
 
 ```sh
-REPLACE_ME_PRIMARY_COMMAND_OR_ENTRYPOINT
+moon run docs:start
 ```
 
-Expected result:
-
-- `REPLACE_ME_EXPECTED_OUTPUT_OR_BEHAVIOR`
-
-## Configuration
-
-Document the minimum configuration needed to use the project.
-
-- `REPLACE_ME_ENV_VAR_NAME`: `REPLACE_ME_ENV_VAR_DESCRIPTION`
-- `REPLACE_ME_CONFIG_FILE`: `REPLACE_ME_CONFIG_FILE_PURPOSE`
+The Go module has not been scaffolded yet. The intended module path is `github.com/meigma/authkit`, with root package name `authkit`.
 
 ## Documentation
 
-- Main docs: `REPLACE_ME_DOCS_URL_OR_PATH`
-- Examples: `REPLACE_ME_EXAMPLES_URL_OR_PATH`
-- Architecture notes: `REPLACE_ME_ARCHITECTURE_DOC_URL_OR_PATH`
+- Docs home: [docs/docs/index.md](docs/docs/index.md)
+- Working design: [docs/docs/design.md](docs/docs/design.md)
 
 ## Support
 
-Use `REPLACE_ME_SUPPORT_CHANNEL` for questions and general support.
-Use `REPLACE_ME_BUG_REPORT_CHANNEL` for non-security bug reports.
+Use [GitHub Discussions](https://github.com/meigma/authkit/discussions) for questions and general support.
+Use [GitHub Issues](https://github.com/meigma/authkit/issues) for non-security bug reports.
 Do not report vulnerabilities in public channels. See [SECURITY.md](SECURITY.md).
 
 ## Contributing
@@ -68,8 +48,5 @@ See [SECURITY.md](SECURITY.md) for supported versions and the private vulnerabil
 
 ## License
 
-Replace this section with the actual license name and add the corresponding `LICENSE` file to the repository.
-
-Example:
-
-`PROJECT_NAME` is licensed under the `REPLACE_ME_LICENSE_NAME`.
+authkit is dual-licensed under the [Apache License 2.0](LICENSE-APACHE) and the [MIT License](LICENSE-MIT).
+You may choose either license for your use.
