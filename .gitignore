@@ -66,6 +66,12 @@ docs/node_modules/
 docs/build/
 docs/.docusaurus/
 
+# Agent session protocol
+.agents/
+.claude/
+.journal/
+.wt/
+
 # OS / editor
 .DS_Store
 .idea/
