@@ -11,6 +11,7 @@ The repository currently contains the project scaffold, documentation site, and 
 
 - Node.js 22.22.2
 - npm
+- Go 1.26
 - Moon 2.x
 
 ### Check the repository
@@ -25,7 +26,7 @@ moon ci --summary minimal
 moon run docs:start
 ```
 
-The Go module has not been scaffolded yet. The intended module path is `github.com/meigma/authkit`, with root package name `authkit`.
+The Go module path is `github.com/meigma/authkit`, with root package name `authkit`.
 
 ## Documentation
 

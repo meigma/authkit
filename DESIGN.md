@@ -84,7 +84,7 @@ Core code should not know whether data comes from static configuration, Postgres
 The exact package tree can evolve during implementation, but the hierarchy should make the hexagonal design obvious.
 
 ```text
-github.com/meigma/auth/
+github.com/meigma/authkit/
   *.go
     core types, pipeline, services, low-level ports
   httpauth/
@@ -101,7 +101,7 @@ github.com/meigma/auth/
     Postgres adapter for real services
 ```
 
-The root package should stay small. It may use package name `authkit` even if the module path is `github.com/meigma/auth`. It may expose a convenience builder, but concrete adapters should live in explicit packages.
+The root package should stay small and use package name `authkit`. It may expose a convenience builder, but concrete adapters should live in explicit packages.
 
 ## Core Types
 
@@ -498,7 +498,6 @@ This keeps the first slice small while protecting the later OIDC path.
 
 ## Open Questions
 
-- Exact module path and root package name.
 - Exact API-token string format.
 - Whether unresolved linked-identity failures should return 401, 403, or a configurable result.
 - How much starter Casbin policy/model material should ship with examples.

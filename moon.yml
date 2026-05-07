@@ -12,23 +12,63 @@ project:
   maintainers:
     - 'meigma'
 
+toolchains:
+  default: 'go'
+
 workspace:
   inheritedTasks:
     include: []
 
-# Add repository-wide maintenance tasks here as authkit grows.
-#
-# tasks:
-#   format:
-#     command: 'prettier --check .'
-#     toolchains: ['javascript', 'node', 'npm']
-#     inputs: []
-#     options:
-#       cache: false
-#
-#   docs-build:
-#     command: 'moon run docs:build'
-#     toolchains: 'system'
-#     inputs: []
-#     options:
-#       cache: false
+fileGroups:
+  go:
+    - '**/*.go'
+    - 'go.mod'
+  lintConfig:
+    - '.golangci.yml'
+    - '.prototools'
+    - '.moon/proto/golangci-lint.toml'
+
+tasks:
+  build:
+    command: 'go build ./...'
+    toolchains: ['go']
+    inputs:
+      - '@group(go)'
+    options:
+      cache: false
+
+  format:
+    command: 'proto run golangci-lint -- fmt --config .golangci.yml --diff'
+    toolchains: ['go']
+    inputs:
+      - '@group(go)'
+      - '@group(lintConfig)'
+    options:
+      cache: false
+
+  lint:
+    command: 'proto run golangci-lint -- run --config .golangci.yml ./... --show-stats=false'
+    toolchains: ['go']
+    inputs:
+      - '@group(go)'
+      - '@group(lintConfig)'
+    options:
+      cache: false
+
+  test:
+    command: 'go test ./...'
+    toolchains: ['go']
+    inputs:
+      - '@group(go)'
+    options:
+      cache: false
+
+  check:
+    deps:
+      - 'root:format'
+      - 'root:lint'
+      - 'root:build'
+      - 'root:test'
+    options:
+      cache: false
+      runInCI: true

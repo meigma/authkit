@@ -53,7 +53,7 @@ moon run docs:start
 moon run docs:typecheck
 ```
 
-The runtime Go module has not been scaffolded yet. When Go code lands, keep Go tests and docs checks passing together.
+Keep Go tests, linting, and docs checks passing together as the runtime packages grow.
 
 ## License
 
