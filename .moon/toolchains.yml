@@ -1,6 +1,4 @@
 # Active toolchains for authkit.
-# The docs project uses npm today. Add Go toolchain settings when the runtime
-# module is scaffolded.
 
 javascript:
   packageManager: 'npm'
@@ -8,9 +6,12 @@ javascript:
 
 npm: {}
 
+proto:
+  version: '0.56.4'
+
 node:
   version: '22.22.2'
   syncVersionManagerConfig: 'nvm'
 
-# Configure npm directly when you want to pin the CLI or customize installs.
-# Keep additional toolchains explicit and version-pinned when they are adopted.
+go:
+  version: '1.26.2'
