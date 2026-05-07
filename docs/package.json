@@ -1,7 +1,8 @@
 {
-  "name": "docs",
+  "name": "@meigma/authkit-docs",
   "version": "0.0.0",
   "private": true,
+  "license": "Apache-2.0 OR MIT",
   "scripts": {
     "docusaurus": "docusaurus",
     "start": "docusaurus start",
