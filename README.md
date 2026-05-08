@@ -3,7 +3,7 @@
 authkit is an early-stage Go library for authentication and authorization in Web API services.
 It provides reusable request authentication, principal resolution, and authorization plumbing without becoming an identity provider, hosted login system, or policy framework.
 
-The current prototype proves the API-token path end to end: an opaque API token authenticates to an external identity, the identity resolves to an internal principal, and Casbin authorizes that principal against an application resource.
+The current prototype proves the shared auth path end to end: an API token or OIDC-issued JWT bearer token authenticates to an external identity, the identity resolves to an internal principal, and Casbin authorizes that principal against an application resource.
 
 ## Status
 
@@ -17,13 +17,13 @@ Implemented today:
 - memory-backed principal, identity-link, and API-token storage
 - Postgres-backed principal, identity-link, and API-token storage
 - Go-level management service for principal, identity-link, and API-token setup flows
+- OIDC-issued JWT bearer-token authentication from trusted issuer and JWKS configuration
 - `net/http` middleware with context helpers and authorization wrappers
 - a thin Casbin authorizer adapter with replaceable request projection
 - `examples/notes`, a runnable vertical example that wires the real packages together
 
 Deferred for later phases:
 
-- OIDC/JWT bearer-token validation
 - trusted-provider storage
 - router-specific adapters
 - built-in admin HTTP APIs
@@ -111,13 +111,27 @@ if err != nil {
 	return err
 }
 
+oidcSource, err := oidc.NewStaticProviderSource(oidc.Provider{
+	Issuer:    "https://issuer.example",
+	Audiences: []string{"notes-api"},
+	JWKSURL:   "https://issuer.example/.well-known/jwks.json",
+})
+if err != nil {
+	return err
+}
+
+oidcAuthenticator, err := oidc.NewAuthenticator(oidcSource, oidc.WithForwardedClaims("email", "name"))
+if err != nil {
+	return err
+}
+
 authorizer, err := authkitcasbin.NewAuthorizer(enforcer)
 if err != nil {
 	return err
 }
 
 pipeline, err := authkit.NewPipeline(authkit.PipelineOptions{
-	Authenticators: []authkit.Authenticator{tokenAuthenticator},
+	Authenticators: []authkit.Authenticator{tokenAuthenticator, oidcAuthenticator},
 	Resolver:       store,
 	Authorizer:     authorizer,
 })
@@ -132,9 +146,9 @@ if err != nil {
 ```
 
 The management service is a Go-level convenience for setup code; the lower-level
-`authkit`, `apikey`, and store packages remain directly usable. `examples/notes`
-shows the complete runnable version, including the Casbin model, policy, HTTP
-route, and request tests.
+`authkit`, `apikey`, `oidc`, and store packages remain directly usable.
+`examples/notes` shows the complete runnable API-token version, including the
+Casbin model, policy, HTTP route, and request tests.
 
 ## Failure Mapping
 
