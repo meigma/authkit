@@ -2,12 +2,15 @@ package memory
 
 import (
 	"context"
+	"crypto/sha256"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/meigma/authkit"
+	"github.com/meigma/authkit/apikey"
 )
 
 const (
@@ -20,6 +23,7 @@ func TestStoreSatisfiesAuthkitContracts(t *testing.T) {
 	var _ authkit.PrincipalCreator = (*Store)(nil)
 	var _ authkit.IdentityLinker = (*Store)(nil)
 	var _ authkit.PrincipalResolver = (*Store)(nil)
+	var _ apikey.TokenStore = (*Store)(nil)
 
 	require.NotNil(t, NewStore())
 }
@@ -353,4 +357,112 @@ func createPrincipal(t *testing.T, store *Store) authkit.Principal {
 	require.NoError(t, err)
 
 	return principal
+}
+
+func TestStoreTokenStorage(t *testing.T) {
+	store := NewStore()
+	now := fixedStoreTime()
+	usedAt := now.Add(time.Hour)
+	wantUsedAt := usedAt
+	token := apikey.StoredToken{
+		ID:          "token_1",
+		PrincipalID: testProvider,
+		Name:        "deploy",
+		SecretHash:  sha256.Sum256([]byte("secret")),
+		ExpiresAt:   now.Add(time.Hour),
+		LastUsedAt:  &usedAt,
+	}
+
+	require.NoError(t, store.CreateToken(context.Background(), token))
+	*token.LastUsedAt = now.Add(time.Minute)
+
+	found, err := store.FindToken(context.Background(), token.ID)
+	require.NoError(t, err)
+	require.NotNil(t, found.LastUsedAt)
+	assert.Equal(t, wantUsedAt, *found.LastUsedAt)
+
+	*found.LastUsedAt = now.Add(time.Minute)
+	foundAgain, err := store.FindToken(context.Background(), token.ID)
+	require.NoError(t, err)
+	require.NotNil(t, foundAgain.LastUsedAt)
+	assert.Equal(t, wantUsedAt, *foundAgain.LastUsedAt)
+}
+
+func TestStoreTokenLastUsedAndRevocation(t *testing.T) {
+	store := NewStore()
+	now := fixedStoreTime()
+	token := createToken(t, store, now)
+	usedAt := now.Add(time.Hour)
+	revokedAt := now.Add(time.Hour + time.Minute)
+
+	require.NoError(t, store.UpdateTokenLastUsed(context.Background(), token.ID, usedAt))
+	require.NoError(t, store.RevokeToken(context.Background(), token.ID, revokedAt))
+
+	found, err := store.FindToken(context.Background(), token.ID)
+	require.NoError(t, err)
+	require.NotNil(t, found.LastUsedAt)
+	require.NotNil(t, found.RevokedAt)
+	assert.Equal(t, usedAt, *found.LastUsedAt)
+	assert.Equal(t, revokedAt, *found.RevokedAt)
+
+	*found.LastUsedAt = now
+	*found.RevokedAt = now
+	foundAgain, err := store.FindToken(context.Background(), token.ID)
+	require.NoError(t, err)
+	require.NotNil(t, foundAgain.LastUsedAt)
+	require.NotNil(t, foundAgain.RevokedAt)
+	assert.Equal(t, usedAt, *foundAgain.LastUsedAt)
+	assert.Equal(t, revokedAt, *foundAgain.RevokedAt)
+}
+
+func TestStoreTokenMissingBehavior(t *testing.T) {
+	store := NewStore()
+	now := fixedStoreTime()
+
+	found, err := store.FindToken(context.Background(), "missing")
+	require.ErrorIs(t, err, apikey.ErrTokenNotFound)
+	assert.Empty(t, found)
+
+	require.ErrorIs(
+		t,
+		store.UpdateTokenLastUsed(context.Background(), "missing", now),
+		apikey.ErrTokenNotFound,
+	)
+	require.ErrorIs(t, store.RevokeToken(context.Background(), "missing", now), apikey.ErrTokenNotFound)
+}
+
+func TestStoreTokenContextCancellation(t *testing.T) {
+	store := NewStore()
+	now := fixedStoreTime()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.ErrorIs(t, store.CreateToken(ctx, tokenFixture(now)), context.Canceled)
+	_, err := store.FindToken(ctx, "token_1")
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, store.UpdateTokenLastUsed(ctx, "token_1", now), context.Canceled)
+	require.ErrorIs(t, store.RevokeToken(ctx, "token_1", now), context.Canceled)
+}
+
+func createToken(t *testing.T, store *Store, now time.Time) apikey.StoredToken {
+	t.Helper()
+
+	token := tokenFixture(now)
+	require.NoError(t, store.CreateToken(context.Background(), token))
+
+	return token
+}
+
+func tokenFixture(now time.Time) apikey.StoredToken {
+	return apikey.StoredToken{
+		ID:          "token_1",
+		PrincipalID: "principal_1",
+		Name:        "deploy",
+		SecretHash:  sha256.Sum256([]byte("secret")),
+		ExpiresAt:   now.Add(time.Hour),
+	}
+}
+
+func fixedStoreTime() time.Time {
+	return time.Date(2026, time.May, 7, 18, 0, 0, 0, time.UTC)
 }

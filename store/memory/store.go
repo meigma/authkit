@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/meigma/authkit"
+	"github.com/meigma/authkit/apikey"
 )
 
 const principalIDPrefix = "principal_"
@@ -19,6 +20,7 @@ type Store struct {
 	nextPrincipalNumber int
 	principals          map[string]authkit.Principal
 	links               map[identityKey]authkit.ExternalIdentity
+	tokens              map[string]apikey.StoredToken
 }
 
 type identityKey struct {
@@ -32,6 +34,7 @@ func NewStore() *Store {
 		nextPrincipalNumber: 1,
 		principals:          make(map[string]authkit.Principal),
 		links:               make(map[identityKey]authkit.ExternalIdentity),
+		tokens:              make(map[string]apikey.StoredToken),
 	}
 }
 
