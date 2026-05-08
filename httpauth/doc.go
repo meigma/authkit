@@ -1,2 +1,2 @@
-// Package httpauth will provide net/http middleware and request helpers.
+// Package httpauth adapts authkit pipelines to net/http handlers.
 package httpauth
