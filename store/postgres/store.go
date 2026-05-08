@@ -17,6 +17,7 @@ import (
 
 	"github.com/meigma/authkit"
 	"github.com/meigma/authkit/apikey"
+	"github.com/meigma/authkit/oidc"
 )
 
 const (
@@ -26,7 +27,7 @@ const (
 	uniqueViolation     = "23505"
 )
 
-// Store persists authkit principals, identity links, and API tokens in PostgreSQL.
+// Store persists authkit principals, identity links, API tokens, and OIDC provider trust in PostgreSQL.
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -284,6 +285,73 @@ func (s *Store) RevokeToken(ctx context.Context, tokenID string, revokedAt time.
 	return nil
 }
 
+// TrustProvider stores provider as trusted for its issuer.
+func (s *Store) TrustProvider(ctx context.Context, provider oidc.Provider) (oidc.Provider, error) {
+	if err := ctx.Err(); err != nil {
+		return oidc.Provider{}, err
+	}
+	if err := provider.Validate(); err != nil {
+		return oidc.Provider{}, err
+	}
+
+	trusted := cloneProvider(provider)
+	signingAlgorithms := trusted.SupportedSigningAlgorithms
+	if signingAlgorithms == nil {
+		signingAlgorithms = []string{}
+	}
+	if _, err := s.pool.Exec(
+		ctx,
+		`insert into authkit_oidc_providers
+			(issuer, jwks_url, audiences, supported_signing_algorithms)
+		values ($1, $2, $3, $4)
+		on conflict (issuer) do update set
+			jwks_url = excluded.jwks_url,
+			audiences = excluded.audiences,
+			supported_signing_algorithms = excluded.supported_signing_algorithms,
+			updated_at = now()`,
+		trusted.Issuer,
+		trusted.JWKSURL,
+		trusted.Audiences,
+		signingAlgorithms,
+	); err != nil {
+		return oidc.Provider{}, fmt.Errorf("postgres: trust OIDC provider: %w", err)
+	}
+
+	return cloneProvider(trusted), nil
+}
+
+// FindProvider returns the trusted OIDC provider for issuer.
+func (s *Store) FindProvider(ctx context.Context, issuer string) (oidc.Provider, error) {
+	if err := ctx.Err(); err != nil {
+		return oidc.Provider{}, err
+	}
+
+	var provider oidc.Provider
+	err := s.pool.QueryRow(
+		ctx,
+		`select issuer, audiences, jwks_url, supported_signing_algorithms
+		from authkit_oidc_providers
+		where issuer = $1`,
+		issuer,
+	).Scan(
+		&provider.Issuer,
+		&provider.Audiences,
+		&provider.JWKSURL,
+		&provider.SupportedSigningAlgorithms,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return oidc.Provider{}, oidc.ErrProviderNotFound
+	}
+	if err != nil {
+		return oidc.Provider{}, fmt.Errorf("postgres: find OIDC provider: %w", err)
+	}
+	if err := provider.Validate(); err != nil {
+		return oidc.Provider{}, fmt.Errorf("postgres: invalid OIDC provider %q: %w", issuer, err)
+	}
+
+	return cloneProvider(provider), nil
+}
+
 func (s *Store) findIdentityLink(
 	ctx context.Context,
 	provider string,
@@ -402,6 +470,24 @@ func cloneAttributes(attrs map[string]any) map[string]any {
 
 	cloned := make(map[string]any, len(attrs))
 	maps.Copy(cloned, attrs)
+
+	return cloned
+}
+
+func cloneProvider(provider oidc.Provider) oidc.Provider {
+	provider.Audiences = cloneStrings(provider.Audiences)
+	provider.SupportedSigningAlgorithms = cloneStrings(provider.SupportedSigningAlgorithms)
+
+	return provider
+}
+
+func cloneStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	cloned := make([]string, len(values))
+	copy(cloned, values)
 
 	return cloned
 }

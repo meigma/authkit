@@ -14,17 +14,16 @@ Implemented today:
 - core `authkit` identity, principal, resource, decision, and port contracts
 - an explicit `Identity -> Principal -> Authorizer` pipeline
 - opaque API-token issuing, verification, revocation, expiration, and last-used tracking
-- memory-backed principal, identity-link, and API-token storage
-- Postgres-backed principal, identity-link, and API-token storage
+- memory-backed principal, identity-link, API-token, and OIDC provider-trust storage
+- Postgres-backed principal, identity-link, API-token, and OIDC provider-trust storage
 - Go-level management service for principal, identity-link, and API-token setup flows
-- OIDC-issued JWT bearer-token authentication from trusted issuer and JWKS configuration
+- OIDC-issued JWT bearer-token authentication from static, memory, Postgres, or app-owned trusted-provider sources
 - `net/http` middleware with context helpers and authorization wrappers
 - a thin Casbin authorizer adapter with replaceable request projection
 - `examples/notes`, a runnable vertical example that wires the real packages together
 
 Deferred for later phases:
 
-- trusted-provider storage
 - router-specific adapters
 - built-in admin HTTP APIs
 - broader high-level composition builders
@@ -120,6 +119,8 @@ if err != nil {
 	return err
 }
 
+// Memory and Postgres stores can also be used directly as mutable OIDC provider
+// trust sources by calling TrustProvider and passing the store to NewAuthenticator.
 oidcAuthenticator, err := oidc.NewAuthenticator(oidcSource, oidc.WithForwardedClaims("email", "name"))
 if err != nil {
 	return err

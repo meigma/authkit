@@ -11,6 +11,7 @@ import (
 
 	"github.com/meigma/authkit"
 	"github.com/meigma/authkit/apikey"
+	"github.com/meigma/authkit/oidc"
 )
 
 const (
@@ -25,6 +26,7 @@ type Store interface {
 	authkit.IdentityLinker
 	authkit.PrincipalResolver
 	apikey.TokenStore
+	oidc.ProviderTrustStore
 }
 
 // Run runs the shared storage behavior suite against newStore.
@@ -260,6 +262,74 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 		}
 	})
 
+	t.Run("trusted providers", func(t *testing.T) {
+		store := newStore(t)
+		provider := providerFixture()
+		want := providerFixture()
+
+		trusted, err := store.TrustProvider(context.Background(), provider)
+		require.NoError(t, err)
+		assert.Equal(t, want, trusted)
+
+		provider.Audiences[0] = "changed before find"
+		trusted.Audiences[0] = "changed from returned provider"
+		trusted.SupportedSigningAlgorithms[0] = "ES256"
+
+		found, err := store.FindProvider(context.Background(), want.Issuer)
+		require.NoError(t, err)
+		assert.Equal(t, want, found)
+
+		found.Audiences[0] = "changed from found provider"
+		found.SupportedSigningAlgorithms[0] = "ES256"
+		foundAgain, err := store.FindProvider(context.Background(), want.Issuer)
+		require.NoError(t, err)
+		assert.Equal(t, want, foundAgain)
+	})
+
+	t.Run("trusted providers can be updated", func(t *testing.T) {
+		store := newStore(t)
+		provider := providerFixture()
+		_, err := store.TrustProvider(context.Background(), provider)
+		require.NoError(t, err)
+
+		updated := oidc.Provider{
+			Issuer:                     provider.Issuer,
+			Audiences:                  []string{"updated-api"},
+			JWKSURL:                    "https://issuer.example/updated-jwks.json",
+			SupportedSigningAlgorithms: []string{"RS512"},
+		}
+		trusted, err := store.TrustProvider(context.Background(), updated)
+		require.NoError(t, err)
+		assert.Equal(t, updated, trusted)
+
+		found, err := store.FindProvider(context.Background(), provider.Issuer)
+		require.NoError(t, err)
+		assert.Equal(t, updated, found)
+	})
+
+	t.Run("trusted providers missing behavior", func(t *testing.T) {
+		store := newStore(t)
+
+		found, err := store.FindProvider(context.Background(), "https://issuer.example")
+
+		require.ErrorIs(t, err, oidc.ErrProviderNotFound)
+		assert.Empty(t, found)
+	})
+
+	t.Run("trusted providers reject invalid configuration", func(t *testing.T) {
+		store := newStore(t)
+		invalid := providerFixture()
+		invalid.Audiences = nil
+
+		trusted, err := store.TrustProvider(context.Background(), invalid)
+		require.Error(t, err)
+		assert.Empty(t, trusted)
+
+		found, err := store.FindProvider(context.Background(), invalid.Issuer)
+		require.ErrorIs(t, err, oidc.ErrProviderNotFound)
+		assert.Empty(t, found)
+	})
+
 	t.Run("returns context error", func(t *testing.T) {
 		store := newStore(t)
 		principal := createPrincipal(t, store)
@@ -336,6 +406,22 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 				name: "revoke token",
 				run: func() error {
 					return store.RevokeToken(ctx, token.ID, fixedStoreTime())
+				},
+			},
+			{
+				name: "trust provider",
+				run: func() error {
+					_, runErr := store.TrustProvider(ctx, providerFixture())
+
+					return runErr
+				},
+			},
+			{
+				name: "find provider",
+				run: func() error {
+					_, runErr := store.FindProvider(ctx, "https://issuer.example")
+
+					return runErr
 				},
 			},
 		}
@@ -461,6 +547,15 @@ func createPrincipal(t *testing.T, store Store) authkit.Principal {
 	require.NoError(t, err)
 
 	return principal
+}
+
+func providerFixture() oidc.Provider {
+	return oidc.Provider{
+		Issuer:                     "https://issuer.example",
+		Audiences:                  []string{"notes-api"},
+		JWKSURL:                    "https://issuer.example/.well-known/jwks.json",
+		SupportedSigningAlgorithms: []string{"RS256"},
+	}
 }
 
 func createToken(t *testing.T, store Store, now time.Time, principalID string) apikey.StoredToken {
