@@ -19,6 +19,7 @@ Implemented today:
 - Go-level management service for principal, identity-link, and API-token setup flows
 - OIDC-issued JWT bearer-token authentication from static, memory, Postgres, or app-owned trusted-provider sources
 - `net/http` middleware with context helpers and authorization wrappers
+- thin HTTP composition helpers for common authenticator, pipeline, and middleware wiring
 - a thin Casbin authorizer adapter with replaceable request projection
 - `examples/notes`, a runnable vertical example that wires the real packages together
 
@@ -26,7 +27,7 @@ Deferred for later phases:
 
 - router-specific adapters
 - built-in admin HTTP APIs
-- broader high-level composition builders
+- broader application bootstrap builders
 
 ## Installation
 
@@ -70,7 +71,15 @@ go test ./examples/notes
 
 ## Composition Shape
 
-The public API is intentionally explicit. Applications wire the adapters they want:
+authkit has two composition layers:
+
+- The root `authkit` package contains the core contracts and `Pipeline`.
+- The `compose` package is the standard `net/http` helper for common API
+  service wiring.
+
+For most `net/http` services, start with `compose.NewHTTP`. Applications still
+own storage, provider trust, Casbin enforcer and policy setup, seed credentials,
+and management workflows:
 
 ```go
 store := memory.NewStore()
@@ -104,11 +113,7 @@ issued, err := managementService.IssueAPIToken(ctx, management.IssueAPITokenRequ
 if err != nil {
 	return err
 }
-
-tokenAuthenticator, err := apikey.NewAuthenticator(tokenService)
-if err != nil {
-	return err
-}
+_ = issued.Plaintext // Show once to the operator.
 
 oidcSource, err := oidc.NewStaticProviderSource(oidc.Provider{
 	Issuer:    "https://issuer.example",
@@ -120,34 +125,34 @@ if err != nil {
 }
 
 // Memory and Postgres stores can also be used directly as mutable OIDC provider
-// trust sources by calling TrustProvider and passing the store to NewAuthenticator.
-oidcAuthenticator, err := oidc.NewAuthenticator(oidcSource, oidc.WithForwardedClaims("email", "name"))
-if err != nil {
-	return err
-}
+// trust sources by calling TrustProvider and passing the store to compose.OIDC.
 
 authorizer, err := authkitcasbin.NewAuthorizer(enforcer)
 if err != nil {
 	return err
 }
 
-pipeline, err := authkit.NewPipeline(authkit.PipelineOptions{
-	Authenticators: []authkit.Authenticator{tokenAuthenticator, oidcAuthenticator},
-	Resolver:       store,
-	Authorizer:     authorizer,
+kit, err := compose.NewHTTP(compose.HTTPOptions{
+	Authenticators: []compose.AuthenticatorSpec{
+		compose.APIToken(tokenService),
+		compose.OIDC(oidcSource, oidc.WithForwardedClaims("email", "name")),
+	},
+	Resolver:   store,
+	Authorizer: authorizer,
 })
 if err != nil {
 	return err
 }
 
-middleware, err := httpauth.NewMiddleware(pipeline)
-if err != nil {
-	return err
-}
+pipeline := kit.Pipeline
+middleware := kit.Middleware
 ```
 
-The management service is a Go-level convenience for setup code; the lower-level
-`authkit`, `apikey`, `oidc`, and store packages remain directly usable.
+The management service is a Go-level convenience for setup code. The
+`compose.NewHTTP` helper is a convenience for HTTP runtime wiring. Neither
+replaces the lower-level packages: applications that need maximum control can
+still call `apikey.NewAuthenticator`, `oidc.NewAuthenticator`,
+`authkit.NewPipeline`, and `httpauth.NewMiddleware` directly.
 `examples/notes` shows the runnable API-token version and tests the mixed
 API-token/OIDC path through the same principal, Casbin policy, HTTP route, and
 request pipeline.

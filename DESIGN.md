@@ -342,35 +342,40 @@ Failure modes should remain distinct:
 
 ## API Shape
 
-The library should support explicit composition and a thin high-level builder.
+The library should support explicit composition and a thin composition helper.
 
 Explicit composition is the architectural foundation:
 
 ```go
-principalSvc := authkit.NewPrincipalService(principalStore, identityStore)
-tokenSvc := apikey.NewService(tokenStore)
-apiTokenAuth := apikey.NewAuthenticator(tokenSvc)
-authorizer := casbin.NewAuthorizer(enforcer)
+tokenSvc, err := apikey.NewService(tokenStore)
+apiTokenAuth, err := apikey.NewAuthenticator(tokenSvc)
+authorizer, err := casbin.NewAuthorizer(enforcer)
 
-mw := httpauth.NewMiddleware(httpauth.Options{
+pipeline, err := authkit.NewPipeline(authkit.PipelineOptions{
     Authenticators: []authkit.Authenticator{apiTokenAuth},
-    Resolver:       principalSvc,
+    Resolver:       principalResolver,
     Authorizer:     authorizer,
 })
+
+mw, err := httpauth.NewMiddleware(pipeline)
 ```
 
-A convenience builder can compose common adapters for simple services:
+A convenience helper can compose common HTTP wiring for simple services:
 
 ```go
-kit, err := authkit.New(
-    authkit.WithAPITokens(tokenStore),
-    authkit.WithPrincipalStore(principalStore),
-    authkit.WithIdentityLinks(identityStore),
-    authkit.WithAuthorizer(authorizer),
-)
+kit, err := compose.NewHTTP(compose.HTTPOptions{
+    Authenticators: []compose.AuthenticatorSpec{
+        compose.APIToken(tokenSvc),
+        compose.OIDC(providerSource),
+    },
+    Resolver:   principalResolver,
+    Authorizer: authorizer,
+})
+
+mw := kit.Middleware
 ```
 
-The high-level API should stay thin and replaceable.
+The composition helper should stay thin and replaceable.
 
 ## Example Usage
 

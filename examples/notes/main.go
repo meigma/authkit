@@ -15,6 +15,7 @@ import (
 	"github.com/meigma/authkit"
 	"github.com/meigma/authkit/apikey"
 	authkitcasbin "github.com/meigma/authkit/casbin"
+	"github.com/meigma/authkit/compose"
 	"github.com/meigma/authkit/httpauth"
 	"github.com/meigma/authkit/oidc"
 	"github.com/meigma/authkit/store/memory"
@@ -149,12 +150,7 @@ func newNotesApp(ctx context.Context, opts ...notesAppOption) (*notesApp, error)
 		return nil, err
 	}
 
-	authenticators, err := newAuthenticators(store, tokenService, cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	middleware, err := newNotesMiddleware(authenticators, store, principal.ID)
+	middleware, err := newNotesMiddleware(store, tokenService, cfg, principal.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -188,8 +184,9 @@ func newNotesApp(ctx context.Context, opts ...notesAppOption) (*notesApp, error)
 }
 
 func newNotesMiddleware(
-	authenticators []authkit.Authenticator,
 	store *memory.Store,
+	tokenService *apikey.Service,
+	cfg notesAppOptions,
 	principalID string,
 ) (*httpauth.Middleware, error) {
 	enforcer, err := newCasbinEnforcer()
@@ -208,39 +205,25 @@ func newNotesMiddleware(
 	if err != nil {
 		return nil, err
 	}
-	pipeline, err := authkit.NewPipeline(authkit.PipelineOptions{
-		Authenticators: authenticators,
-		Resolver:       store,
-		Authorizer:     authorizer,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return httpauth.NewMiddleware(pipeline)
-}
-
-func newAuthenticators(
-	store *memory.Store,
-	tokenService *apikey.Service,
-	cfg notesAppOptions,
-) ([]authkit.Authenticator, error) {
-	tokenAuthenticator, err := apikey.NewAuthenticator(tokenService)
-	if err != nil {
-		return nil, err
-	}
 	oidcOptions := []oidc.Option{
 		oidc.WithClock(cfg.clock),
 	}
 	if cfg.oidcHTTPClient != nil {
 		oidcOptions = append(oidcOptions, oidc.WithHTTPClient(cfg.oidcHTTPClient))
 	}
-	oidcAuthenticator, err := oidc.NewAuthenticator(store, oidcOptions...)
+	auth, err := compose.NewHTTP(compose.HTTPOptions{
+		Authenticators: []compose.AuthenticatorSpec{
+			compose.APIToken(tokenService),
+			compose.OIDC(store, oidcOptions...),
+		},
+		Resolver:   store,
+		Authorizer: authorizer,
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	return []authkit.Authenticator{tokenAuthenticator, oidcAuthenticator}, nil
+	return auth.Middleware, nil
 }
 
 func (a *notesApp) ServeHTTP(w http.ResponseWriter, req *http.Request) {
