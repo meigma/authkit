@@ -38,7 +38,7 @@ func TestServiceIssueToken(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, issued.ID)
 	assert.Equal(t, expiresAt, issued.ExpiresAt)
-	assert.Equal(t, authkit.ExternalIdentity{
+	assert.Equal(t, authkit.LinkIdentityRequest{
 		Provider:    apikey.Provider,
 		Subject:     issued.ID,
 		PrincipalID: testPrincipalID,
@@ -251,7 +251,7 @@ func TestTokenIdentityResolvesThroughMemoryStore(t *testing.T) {
 	})
 	require.NoError(t, err)
 	issued := issueTokenForPrincipal(t, service, principal.ID, now.Add(time.Hour))
-	_, err = store.LinkIdentity(context.Background(), authkit.LinkIdentityRequest(issued.IdentityLink))
+	_, err = store.LinkIdentity(context.Background(), issued.IdentityLink)
 	require.NoError(t, err)
 
 	identity, err := service.VerifyToken(context.Background(), issued.Plaintext)

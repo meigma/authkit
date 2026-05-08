@@ -7,6 +7,10 @@ description: Documentation for the authkit Go authentication and authorization l
 # authkit Docs
 
 authkit is a Go library for authentication and authorization in Web API services.
-The first implementation slice is intentionally small: prove the API-token path, then expand from real usage.
+The current prototype proves the API-token path end to end: opaque token
+authentication, explicit identity-to-principal linking, `net/http` middleware,
+and Casbin authorization.
 
-Start with the [working design](design.md) for the current architecture, package layout, and v0 prototype scope.
+Start with the [working design](design.md) for the architecture and package
+layout. For the shortest runnable path, use `examples/notes` from the
+repository root.
