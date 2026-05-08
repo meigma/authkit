@@ -1,3 +1,2 @@
-// Package casbin will adapt Casbin authorization to authkit authorizer
-// contracts.
+// Package casbin adapts Casbin enforcement to authkit authorizer contracts.
 package casbin
