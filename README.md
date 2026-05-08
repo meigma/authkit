@@ -15,6 +15,8 @@ Implemented today:
 - an explicit `Identity -> Principal -> Authorizer` pipeline
 - opaque API-token issuing, verification, revocation, expiration, and last-used tracking
 - memory-backed principal, identity-link, and API-token storage
+- Postgres-backed principal, identity-link, and API-token storage
+- Go-level management service for principal, identity-link, and API-token setup flows
 - `net/http` middleware with context helpers and authorization wrappers
 - a thin Casbin authorizer adapter with replaceable request projection
 - `examples/notes`, a runnable vertical example that wires the real packages together
@@ -22,11 +24,10 @@ Implemented today:
 Deferred for later phases:
 
 - OIDC/JWT bearer-token validation
-- Postgres storage and migrations
 - trusted-provider storage
 - router-specific adapters
 - built-in admin HTTP APIs
-- high-level composition builders
+- broader high-level composition builders
 
 ## Installation
 
@@ -79,7 +80,16 @@ if err != nil {
 	return err
 }
 
-principal, err := store.CreatePrincipal(ctx, authkit.CreatePrincipalRequest{
+managementService, err := management.NewService(management.Options{
+	PrincipalCreator: store,
+	IdentityLinker:   store,
+	APITokens:        tokenService,
+})
+if err != nil {
+	return err
+}
+
+principal, err := managementService.CreatePrincipal(ctx, authkit.CreatePrincipalRequest{
 	Kind:        authkit.PrincipalKindService,
 	DisplayName: "deploy service",
 })
@@ -87,16 +97,11 @@ if err != nil {
 	return err
 }
 
-issued, err := tokenService.IssueToken(ctx, apikey.IssueRequest{
+issued, err := managementService.IssueAPIToken(ctx, management.IssueAPITokenRequest{
 	PrincipalID: principal.ID,
 	Name:        "deploy token",
 	ExpiresAt:   time.Now().Add(24 * time.Hour),
 })
-if err != nil {
-	return err
-}
-
-_, err = store.LinkIdentity(ctx, issued.IdentityLink)
 if err != nil {
 	return err
 }
@@ -126,7 +131,10 @@ if err != nil {
 }
 ```
 
-`examples/notes` shows the complete runnable version, including the Casbin model, policy, HTTP route, and request tests.
+The management service is a Go-level convenience for setup code; the lower-level
+`authkit`, `apikey`, and store packages remain directly usable. `examples/notes`
+shows the complete runnable version, including the Casbin model, policy, HTTP
+route, and request tests.
 
 ## Failure Mapping
 
