@@ -16,6 +16,7 @@ import (
 	"github.com/meigma/authkit/apikey"
 	authkitcasbin "github.com/meigma/authkit/casbin"
 	"github.com/meigma/authkit/httpauth"
+	"github.com/meigma/authkit/oidc"
 	"github.com/meigma/authkit/store/memory"
 )
 
@@ -48,11 +49,32 @@ m = r.sub == p.sub && r.obj == p.obj && r.act == p.act
 
 type notesApp struct {
 	handler        http.Handler
+	store          *memory.Store
 	tokenService   *apikey.Service
 	principal      authkit.Principal
+	seedIdentity   authkit.ExternalIdentity
 	seedToken      string
 	tokenExpiresAt time.Time
 	notes          map[string]string
+}
+
+type notesAppOptions struct {
+	clock          func() time.Time
+	oidcHTTPClient *http.Client
+}
+
+type notesAppOption func(*notesAppOptions)
+
+func withClock(clock func() time.Time) notesAppOption {
+	return func(opts *notesAppOptions) {
+		opts.clock = clock
+	}
+}
+
+func withOIDCHTTPClient(client *http.Client) notesAppOption {
+	return func(opts *notesAppOptions) {
+		opts.oidcHTTPClient = client
+	}
 }
 
 func main() {
@@ -63,7 +85,7 @@ func main() {
 }
 
 func run(ctx context.Context, out io.Writer) error {
-	app, err := newNotesApp(ctx, time.Now)
+	app, err := newNotesApp(ctx)
 	if err != nil {
 		return err
 	}
@@ -86,13 +108,21 @@ func run(ctx context.Context, out io.Writer) error {
 	return nil
 }
 
-func newNotesApp(ctx context.Context, clock func() time.Time) (*notesApp, error) {
-	if clock == nil {
-		clock = time.Now
+func newNotesApp(ctx context.Context, opts ...notesAppOption) (*notesApp, error) {
+	cfg := notesAppOptions{
+		clock: time.Now,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+	if cfg.clock == nil {
+		cfg.clock = time.Now
 	}
 
 	store := memory.NewStore()
-	tokenService, err := apikey.NewService(store, apikey.WithClock(clock))
+	tokenService, err := apikey.NewService(store, apikey.WithClock(cfg.clock))
 	if err != nil {
 		return nil, err
 	}
@@ -108,56 +138,32 @@ func newNotesApp(ctx context.Context, clock func() time.Time) (*notesApp, error)
 	issued, err := tokenService.IssueToken(ctx, apikey.IssueRequest{
 		PrincipalID: principal.ID,
 		Name:        "notes example token",
-		ExpiresAt:   clock().Add(seedTokenTTL),
+		ExpiresAt:   cfg.clock().Add(seedTokenTTL),
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = store.LinkIdentity(ctx, issued.IdentityLink)
+	seedIdentity, err := store.LinkIdentity(ctx, issued.IdentityLink)
 	if err != nil {
 		return nil, err
 	}
 
-	tokenAuthenticator, err := apikey.NewAuthenticator(tokenService)
+	authenticators, err := newAuthenticators(store, tokenService, cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	enforcer, err := newCasbinEnforcer()
-	if err != nil {
-		return nil, err
-	}
-	policyAdded, err := enforcer.AddPolicy(principal.ID, noteObject(allowedNoteID), readNoteAction)
-	if err != nil {
-		return nil, err
-	}
-	if !policyAdded {
-		return nil, errors.New("notes: seed policy already exists")
-	}
-
-	authorizer, err := authkitcasbin.NewAuthorizer(enforcer)
-	if err != nil {
-		return nil, err
-	}
-
-	pipeline, err := authkit.NewPipeline(authkit.PipelineOptions{
-		Authenticators: []authkit.Authenticator{tokenAuthenticator},
-		Resolver:       store,
-		Authorizer:     authorizer,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	middleware, err := httpauth.NewMiddleware(pipeline)
+	middleware, err := newNotesMiddleware(authenticators, store, principal.ID)
 	if err != nil {
 		return nil, err
 	}
 
 	app := &notesApp{
+		store:          store,
 		tokenService:   tokenService,
 		principal:      principal,
+		seedIdentity:   seedIdentity,
 		seedToken:      issued.Plaintext,
 		tokenExpiresAt: issued.ExpiresAt,
 		notes: map[string]string{
@@ -179,6 +185,62 @@ func newNotesApp(ctx context.Context, clock func() time.Time) (*notesApp, error)
 	app.handler = mux
 
 	return app, nil
+}
+
+func newNotesMiddleware(
+	authenticators []authkit.Authenticator,
+	store *memory.Store,
+	principalID string,
+) (*httpauth.Middleware, error) {
+	enforcer, err := newCasbinEnforcer()
+	if err != nil {
+		return nil, err
+	}
+	policyAdded, err := enforcer.AddPolicy(principalID, noteObject(allowedNoteID), readNoteAction)
+	if err != nil {
+		return nil, err
+	}
+	if !policyAdded {
+		return nil, errors.New("notes: seed policy already exists")
+	}
+
+	authorizer, err := authkitcasbin.NewAuthorizer(enforcer)
+	if err != nil {
+		return nil, err
+	}
+	pipeline, err := authkit.NewPipeline(authkit.PipelineOptions{
+		Authenticators: authenticators,
+		Resolver:       store,
+		Authorizer:     authorizer,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return httpauth.NewMiddleware(pipeline)
+}
+
+func newAuthenticators(
+	store *memory.Store,
+	tokenService *apikey.Service,
+	cfg notesAppOptions,
+) ([]authkit.Authenticator, error) {
+	tokenAuthenticator, err := apikey.NewAuthenticator(tokenService)
+	if err != nil {
+		return nil, err
+	}
+	oidcOptions := []oidc.Option{
+		oidc.WithClock(cfg.clock),
+	}
+	if cfg.oidcHTTPClient != nil {
+		oidcOptions = append(oidcOptions, oidc.WithHTTPClient(cfg.oidcHTTPClient))
+	}
+	oidcAuthenticator, err := oidc.NewAuthenticator(store, oidcOptions...)
+	if err != nil {
+		return nil, err
+	}
+
+	return []authkit.Authenticator{tokenAuthenticator, oidcAuthenticator}, nil
 }
 
 func (a *notesApp) ServeHTTP(w http.ResponseWriter, req *http.Request) {

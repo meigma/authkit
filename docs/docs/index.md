@@ -14,4 +14,4 @@ resolution, `net/http` middleware, and Casbin authorization.
 
 Start with the [working design](design.md) for the architecture and package
 layout. For the shortest runnable path, use `examples/notes` from the
-repository root.
+repository root; its tests cover the mixed API-token/OIDC credential path.

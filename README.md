@@ -148,8 +148,9 @@ if err != nil {
 
 The management service is a Go-level convenience for setup code; the lower-level
 `authkit`, `apikey`, `oidc`, and store packages remain directly usable.
-`examples/notes` shows the complete runnable API-token version, including the
-Casbin model, policy, HTTP route, and request tests.
+`examples/notes` shows the runnable API-token version and tests the mixed
+API-token/OIDC path through the same principal, Casbin policy, HTTP route, and
+request pipeline.
 
 ## Failure Mapping
 
