@@ -1,120 +1,202 @@
 # Implementation Plan
 
-Status: proposed
+Status: refreshed after the API-token prototype
 
-This plan is intentionally high-level. The goal is to guide the first implementation without pretending the API is already known perfectly. Each phase should produce a small, reviewable result and let the next phase adjust based on what the code teaches us.
+This plan starts from the current working prototype instead of replaying the
+original phase sequence. The goal is to turn the proven shape into a usable v0
+library while preserving the same working style: small phases, real behavior,
+and room to reshape the next step based on what implementation teaches us.
 
-## Prototype Target
+## Current Baseline
 
-The first full prototype should prove the core auth shape with API tokens only:
+The first API-token prototype is present in the repository:
 
-- core model and contracts
-- explicit identity-to-principal resolution
-- in-memory stores
-- opaque API-token issuing and verification
-- `net/http` middleware and request-context helpers
-- authorization wrapper with injectable resource extraction
-- Casbin authorizer adapter
-- one small runnable example route
-- focused tests around the real request path
+- core `authkit` identity, principal, resource, decision, and port contracts
+- explicit `Identity -> Principal -> Authorizer` request pipeline
+- memory-backed principal, identity-link, and API-token storage
+- opaque API-token issuing, verification, revocation, expiration, and last-used tracking
+- router-neutral `net/http` middleware with context helpers and authorization wrappers
+- thin Casbin authorizer adapter with replaceable request projection
+- `examples/notes`, a runnable vertical example that wires the real packages together
+- focused behavior tests around token, memory, pipeline, HTTP, Casbin, and example paths
 
-Postgres, OIDC/JWT validation, migrations, router adapters, admin HTTP APIs, and advanced Casbin examples should stay out of the first prototype unless the implementation uncovers a blocking reason to pull one forward.
+The prototype intentionally did not include production storage, OIDC/JWT
+validation, provider-trust storage, router-specific adapters, admin HTTP APIs,
+auto-provisioning, or a high-level composition builder.
 
-## Phase 1: Establish The Go Skeleton
+## Planning Principles
 
-Create the smallest Go module scaffold that can compile, test, and host the package boundaries from the design. Keep repository wiring practical: module metadata, package directories, basic test/lint commands, and enough CI/task configuration to run the prototype.
+- Preserve the central invariant: credentials authenticate to `Identity`,
+  identities resolve to internal `Principal`, and authorization operates on
+  `Principal + action + Resource`.
+- Keep explicit composition as the architectural foundation. Convenience APIs
+  can wrap the common path later, but they must not hide or replace the ports.
+- Prove each new capability through a real vertical path before broadening it.
+- Keep concrete storage, provider trust, HTTP rendering, and authorization
+  policy replaceable at adapter boundaries.
+- Do not add a built-in admin HTTP API. Reusable Go services are useful;
+  applications decide whether to expose them through REST, CLI, seed scripts,
+  migrations, or internal setup code.
+- Do not build a second policy language above Casbin. The library should feed
+  stable subjects, actions, and resources into application-owned policy.
+- Keep docs and design notes practical. Update them when implementation changes
+  the shape, but do not let documentation work become a waterfall design pass.
 
-This phase should avoid polishing public docs or finalizing every package name. The only important outcome is a working workspace where small packages can evolve quickly.
+## Phase 1: Tighten The Prototype
 
-## Phase 2: Define The Core Contract
+Close the obvious gaps from the API-token prototype without expanding feature
+scope.
 
-Implement the root package with the boring center of the system:
+- Refresh `README.md` so it describes the working prototype and points to the
+  shortest path through `examples/notes`.
+- Refresh stale package docs where they still describe future behavior as if it
+  does not exist.
+- Review the public API seams exposed by `examples/notes` and make only small
+  changes that remove real friction.
+- Confirm and document the current failure mapping: invalid or missing
+  credentials, valid but unlinked identities, denied authorization decisions,
+  and internal collaborator failures.
+- Keep OIDC, Postgres, provider storage, and builders out of this phase.
 
-- identity, principal, resource, and decision types
-- authenticator, principal resolver, and authorizer ports
-- pipeline-level errors or result categories for unauthenticated, unresolved, unauthorized, and internal failure cases
-- small service contracts for creating principals and linking identities
+Done when the docs match the current implementation, the example remains the
+main acceptance path, and `moon ci --summary minimal` passes.
 
-Keep these contracts narrow. If a storage or service method is not needed by the API-token prototype path, leave it out until a later phase proves the shape.
+## Phase 2: Add A Postgres Storage Adapter
 
-## Phase 3: Build Memory-Backed Principal Resolution
+Add the first production storage backend for the API-token path already proven
+by memory storage.
 
-Add memory stores and services for principals and external identity links. This is the first useful bottom-up behavior: create a principal, link an external identity, and resolve that identity back to the principal.
+- Add a `store/postgres` adapter that satisfies the existing principal creation,
+  identity linking, principal resolution, and API-token storage contracts.
+- Add migrations for principals, external identity links, and API tokens.
+- Preserve hash-only token storage, expiration, revocation, and best-effort
+  last-used behavior.
+- Use database constraints for uniqueness and referential integrity instead of
+  relying only on application checks.
+- Build shared behavior tests that can run against both memory and Postgres
+  where practical.
+- Keep Casbin policy storage delegated to Casbin's adapter ecosystem unless
+  real use proves tighter integration is necessary.
 
-The memory adapter should bias toward deterministic tests and examples over production features. Concurrency safety is useful, but durability, migrations, and query generality are not part of this phase.
+Done when the existing API-token pipeline can run against Postgres and the
+Postgres adapter has deterministic integration coverage.
 
-## Phase 4: Prove Opaque API Tokens
+## Phase 3: Harden Service-Level Management
 
-Build the API-token package around storage-backed opaque tokens:
+Tighten the reusable Go management surface for operations that applications
+need to expose or run during setup.
 
-- secure token issuance
-- token lookup by stable ID or prefix
-- hash-only storage
-- expiration and revocation checks
-- best-effort last-used update hook
-- authenticator that converts a valid token into an external identity
+- Keep the existing narrow operations: create principal, link identity, issue
+  API token, and revoke API token.
+- Add a small composition facade only if it reduces real boilerplate after the
+  Postgres adapter exists.
+- Choose the package boundary during implementation so the facade does not
+  create import cycles between the root package and adapter packages.
+- Keep request and result types boring and explicit.
+- Do not add list/search/update/admin workflows until a real service needs them.
+- Do not add a built-in admin HTTP API.
 
-The important design check is that API tokens still go through the same `Identity -> Principal` path that OIDC will eventually use. Do not let token verification jump directly to a principal just because it is easier in the first pass.
+Done when an application can script common management flows without knowing the
+details of every adapter, while still being able to use the lower-level
+packages directly.
 
-## Phase 5: Assemble The Auth Pipeline
+## Phase 4: Add OIDC/JWT Bearer Authentication
 
-Compose authenticators, the principal resolver, and the authorizer into a reusable request pipeline. This is where failure semantics should become concrete enough for HTTP to consume without overfitting the core package to HTTP status codes.
+Add real bearer-token validation without changing the core pipeline.
 
-Use the implementation to decide whether the pipeline belongs mostly in the root package or the HTTP adapter. The invariant is more important than the exact file layout: credentials authenticate to identities, identities resolve to principals, and principals are authorized for actions on resources.
+- Add an `oidc` package for bearer-token authentication.
+- Define the trusted-provider lookup contract at the smallest useful boundary.
+- Validate issuer, audience, signature, expiry, and standard token validity
+  using current upstream OIDC/JWT libraries and docs at implementation time.
+- Produce `authkit.Identity` values that use a stable issuer-and-subject identity
+  key. Do not use email as a stable identity key.
+- Expose selected claims for application display, logging, or policy hooks
+  without granting permissions directly from arbitrary claims in core.
+- Fail closed when provider trust cannot be established or token validation
+  cannot complete.
+- Prove behavior with local test issuers and JWKS fixtures, not live external
+  providers.
 
-## Phase 6: Add The `net/http` Adapter
+Done when a validated OIDC/JWT bearer token authenticates to `Identity`, an
+unlinked identity fails principal resolution, and the existing pipeline and HTTP
+middleware need no redesign.
 
-Implement the HTTP adapter after the core pipeline works in tests:
+## Phase 5: Add Trusted-Provider Sources
 
-- middleware that runs authentication and principal resolution
-- context helpers for identity and principal access
-- `Require` and `RequireFunc` authorization wrappers
-- injectable resource extraction
-- default error rendering that distinguishes unauthenticated, unauthorized, and internal failures
-- option hooks for applications to customize rendering later
+Add provider trust adapters after the OIDC authenticator shape is proven.
 
-Keep this router-neutral. The standard library path-value flow can be supported in examples, but framework-specific assumptions should not leak into the core adapter.
+- Start with static or memory provider sources if the OIDC phase does not
+  already include them.
+- Add Postgres-backed provider trust only once the minimal provider shape is
+  clear from the authenticator.
+- Keep provider records focused on trust and validation inputs such as issuer,
+  audiences, and optional display metadata.
+- Keep management of trusted providers as Go-level service operations or
+  app-owned code, not a built-in HTTP admin surface.
+- Preserve fail-closed behavior for missing or unavailable trusted-provider
+  configuration.
 
-## Phase 7: Add The Casbin Adapter
+Done when applications can choose static, memory, or Postgres provider trust
+without changing the authenticator or core pipeline.
 
-Implement the smallest Casbin adapter that satisfies the authorizer port. Default to principal ID as the Casbin subject and keep action/resource projection replaceable.
+## Phase 6: Prove Mixed Credentials Vertically
 
-Ship only a starter model or example policy if it helps prove the prototype. Avoid creating a second policy abstraction above Casbin.
+Prove that API tokens and OIDC credentials both use the same application
+principal and authorization model.
 
-## Phase 8: Write The Vertical Example
+- Add or extend an example service with both API-token and OIDC authenticators.
+- Link an API-token identity and an OIDC identity to the same principal.
+- Protect one route through the existing `httpauth` and Casbin path.
+- Cover allowed, denied, missing credential, invalid token, wrong audience or
+  issuer, and valid-but-unlinked identity cases.
+- Use this phase to identify API seams that should be fixed before adding a
+  builder.
 
-Create one small example service that uses the real packages together:
+Done when the mixed-credential example is the acceptance test for the intended
+multi-credential architecture.
 
-- create or seed a principal
-- issue an API token
-- link the token identity to the principal
-- protect one route with `RequireFunc`
-- authorize through Casbin
-- show the allowed and denied paths in tests or a simple runnable example
+## Phase 7: Add A Thin Composition API
 
-This phase should expose awkward API seams. Fix the seams discovered here before broadening scope. The example is the prototype's main acceptance test.
+Add a convenience API only after explicit composition has survived production
+storage and OIDC.
 
-## Phase 9: Tighten The Prototype
+- Wrap common setup for authenticators, resolver, authorizer, pipeline, and
+  HTTP middleware.
+- Keep lower-level packages and explicit composition fully supported.
+- Avoid global mutable state and hidden defaults that make production behavior
+  hard to inspect.
+- Keep package placement flexible so the builder does not introduce import
+  cycles or force the root package to depend on concrete adapters.
+- Treat the builder as a convenience layer, not the primary architecture.
 
-Finish with a focused quality pass:
+Done when a small service can use the common path with less wiring while an
+advanced service can still replace every adapter explicitly.
 
-- unit tests for token generation, hash-only storage, expiration, revocation, identity resolution, and Casbin projection
-- HTTP tests for context population, allow/deny behavior, unresolved identity behavior, and error mapping
-- package-level doc comments only where they help users understand composition
-- README refresh with the shortest working path through the example
-- design notes updated only for discoveries that materially changed the architecture
+## Phase 8: v0 Readiness Pass
 
-Do not turn this phase into a documentation or framework-building project. The output should be a working prototype that is ready to integrate into one real service and learn from.
+Prepare the library for real service integration without pretending the public
+API is final.
 
-## Decisions To Leave Open Until Implementation
+- Review exported APIs, package docs, README, and design docs for consistency.
+- Add or update examples that show the supported composition paths.
+- Document security invariants and extension points that matter to consumers.
+- Confirm CI, formatting, linting, and test coverage on all supported packages.
+- Record known deferred scope clearly.
+- If no real service has integrated the library yet, mark the API as
+  experimental and avoid declaring it stable.
 
-- Exact module path and root package name.
-- Exact API-token string format.
-- Whether unresolved valid credentials map to a default `401`, `403`, or configurable HTTP response.
-- Whether the high-level builder is useful in v0 or should wait until explicit composition feels stable.
-- How much starter Casbin policy material belongs in the library versus examples.
-- Whether token last-used updates should be synchronous, asynchronous, or purely adapter-defined.
+Done when the library is ready to integrate into one real service and learn
+from that integration.
 
-## Implementation Rhythm
+## Still Deferred
 
-Work phase by phase, but do not treat the plan as a contract. After each phase, run the narrow test set that proves that phase and adjust the next phase if the API shape feels wrong. Prefer deleting or reshaping early code over preserving a bad abstraction.
+- Hosted browser login
+- OAuth authorization server behavior
+- SAML, SCIM, MFA, and user-management workflows
+- Auto-provisioning external identities
+- Built-in admin HTTP APIs
+- Router/framework-specific adapters
+- SQLite storage
+- Advanced Casbin examples or policy models
+- A custom policy language or relationship graph
+- v1 API stability before at least one real service integration
