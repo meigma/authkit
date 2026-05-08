@@ -1,0 +1,423 @@
+package postgres
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/meigma/authkit"
+	"github.com/meigma/authkit/apikey"
+)
+
+const (
+	foreignKeyViolation = "23503"
+	principalIDAttempts = 3
+	principalIDPrefix   = "principal_"
+	uniqueViolation     = "23505"
+)
+
+// Store persists authkit principals, identity links, and API tokens in PostgreSQL.
+type Store struct {
+	pool *pgxpool.Pool
+}
+
+// NewStore constructs a PostgreSQL store around pool.
+func NewStore(pool *pgxpool.Pool) (*Store, error) {
+	if pool == nil {
+		return nil, errors.New("postgres: pool is required")
+	}
+
+	return &Store{
+		pool: pool,
+	}, nil
+}
+
+// CreatePrincipal creates a principal in PostgreSQL.
+func (s *Store) CreatePrincipal(
+	ctx context.Context,
+	req authkit.CreatePrincipalRequest,
+) (authkit.Principal, error) {
+	if err := ctx.Err(); err != nil {
+		return authkit.Principal{}, err
+	}
+	if req.Kind != authkit.PrincipalKindUser && req.Kind != authkit.PrincipalKindService {
+		return authkit.Principal{}, fmt.Errorf("postgres: unsupported principal kind %q", req.Kind)
+	}
+
+	attributes, err := encodeAttributes(req.Attributes)
+	if err != nil {
+		return authkit.Principal{}, err
+	}
+
+	for range principalIDAttempts {
+		principal := authkit.Principal{
+			ID:          principalIDPrefix + rand.Text(),
+			Kind:        req.Kind,
+			DisplayName: req.DisplayName,
+			Attributes:  cloneAttributes(req.Attributes),
+		}
+		_, err := s.pool.Exec(
+			ctx,
+			`insert into authkit_principals (id, kind, display_name, attributes)
+			values ($1, $2, $3, nullif($4, '')::jsonb)`,
+			principal.ID,
+			string(principal.Kind),
+			principal.DisplayName,
+			attributes,
+		)
+		if err == nil {
+			return principal, nil
+		}
+		if !isPostgresCode(err, uniqueViolation) {
+			return authkit.Principal{}, fmt.Errorf("postgres: create principal: %w", err)
+		}
+	}
+
+	return authkit.Principal{}, errors.New("postgres: create principal: generated duplicate principal IDs")
+}
+
+// LinkIdentity links an external identity to an existing principal.
+func (s *Store) LinkIdentity(
+	ctx context.Context,
+	req authkit.LinkIdentityRequest,
+) (authkit.ExternalIdentity, error) {
+	if err := ctx.Err(); err != nil {
+		return authkit.ExternalIdentity{}, err
+	}
+	if req.Provider == "" {
+		return authkit.ExternalIdentity{}, errors.New("postgres: provider is required")
+	}
+	if req.Subject == "" {
+		return authkit.ExternalIdentity{}, errors.New("postgres: subject is required")
+	}
+	if req.PrincipalID == "" {
+		return authkit.ExternalIdentity{}, errors.New("postgres: principal ID is required")
+	}
+
+	link, err := s.findIdentityLink(ctx, req.Provider, req.Subject)
+	if err == nil {
+		if link.PrincipalID == req.PrincipalID {
+			return link, nil
+		}
+
+		return authkit.ExternalIdentity{}, fmt.Errorf(
+			"postgres: identity %q/%q is already linked to principal %q",
+			req.Provider,
+			req.Subject,
+			link.PrincipalID,
+		)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return authkit.ExternalIdentity{}, fmt.Errorf("postgres: find identity link: %w", err)
+	}
+
+	link = authkit.ExternalIdentity(req)
+	if _, err := s.pool.Exec(
+		ctx,
+		`insert into authkit_external_identities (provider, subject, principal_id)
+		values ($1, $2, $3)`,
+		link.Provider,
+		link.Subject,
+		link.PrincipalID,
+	); err != nil {
+		if isPostgresCode(err, uniqueViolation) {
+			return s.resolveIdentityLinkConflict(ctx, req)
+		}
+		if isPostgresCode(err, foreignKeyViolation) {
+			return authkit.ExternalIdentity{}, fmt.Errorf(
+				"postgres: principal %q does not exist",
+				req.PrincipalID,
+			)
+		}
+
+		return authkit.ExternalIdentity{}, fmt.Errorf("postgres: link identity: %w", err)
+	}
+
+	return link, nil
+}
+
+// ResolveIdentity returns the principal linked to identity.
+func (s *Store) ResolveIdentity(
+	ctx context.Context,
+	identity authkit.Identity,
+) (*authkit.Principal, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if identity.Provider == "" || identity.Subject == "" {
+		return nil, fmt.Errorf("%w: provider and subject are required", authkit.ErrUnresolvedIdentity)
+	}
+
+	var principal authkit.Principal
+	var kind string
+	var attributes string
+	err := s.pool.QueryRow(
+		ctx,
+		`select p.id, p.kind, p.display_name, coalesce(p.attributes::text, '')
+		from authkit_external_identities as i
+		join authkit_principals as p on p.id = i.principal_id
+		where i.provider = $1 and i.subject = $2`,
+		identity.Provider,
+		identity.Subject,
+	).Scan(&principal.ID, &kind, &principal.DisplayName, &attributes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf(
+			"%w: identity %q/%q is not linked",
+			authkit.ErrUnresolvedIdentity,
+			identity.Provider,
+			identity.Subject,
+		)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("postgres: resolve identity: %w", err)
+	}
+
+	principal.Kind = authkit.PrincipalKind(kind)
+	principal.Attributes, err = decodeAttributes(attributes)
+	if err != nil {
+		return nil, err
+	}
+
+	return &principal, nil
+}
+
+// CreateToken stores token.
+func (s *Store) CreateToken(ctx context.Context, token apikey.StoredToken) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if token.ID == "" {
+		return errors.New("postgres: token ID is required")
+	}
+
+	if _, err := s.pool.Exec(
+		ctx,
+		`insert into authkit_api_tokens
+			(id, principal_id, name, secret_hash, expires_at, last_used_at, revoked_at)
+		values ($1, $2, $3, $4, $5, $6, $7)`,
+		token.ID,
+		token.PrincipalID,
+		token.Name,
+		token.SecretHash[:],
+		token.ExpiresAt,
+		token.LastUsedAt,
+		token.RevokedAt,
+	); err != nil {
+		if isPostgresCode(err, foreignKeyViolation) {
+			return fmt.Errorf("postgres: principal %q does not exist", token.PrincipalID)
+		}
+
+		return fmt.Errorf("postgres: create token: %w", err)
+	}
+
+	return nil
+}
+
+// FindToken returns the token for tokenID.
+func (s *Store) FindToken(ctx context.Context, tokenID string) (apikey.StoredToken, error) {
+	if err := ctx.Err(); err != nil {
+		return apikey.StoredToken{}, err
+	}
+
+	token, err := s.findToken(ctx, tokenID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return apikey.StoredToken{}, apikey.ErrTokenNotFound
+	}
+	if err != nil {
+		return apikey.StoredToken{}, err
+	}
+
+	return token, nil
+}
+
+// UpdateTokenLastUsed records the most recent successful use of tokenID.
+func (s *Store) UpdateTokenLastUsed(ctx context.Context, tokenID string, usedAt time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	tag, err := s.pool.Exec(
+		ctx,
+		`update authkit_api_tokens set last_used_at = $2 where id = $1`,
+		tokenID,
+		usedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("postgres: update token last used: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return apikey.ErrTokenNotFound
+	}
+
+	return nil
+}
+
+// RevokeToken records tokenID as revoked.
+func (s *Store) RevokeToken(ctx context.Context, tokenID string, revokedAt time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	tag, err := s.pool.Exec(
+		ctx,
+		`update authkit_api_tokens set revoked_at = $2 where id = $1`,
+		tokenID,
+		revokedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("postgres: revoke token: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return apikey.ErrTokenNotFound
+	}
+
+	return nil
+}
+
+func (s *Store) findIdentityLink(
+	ctx context.Context,
+	provider string,
+	subject string,
+) (authkit.ExternalIdentity, error) {
+	var link authkit.ExternalIdentity
+	err := s.pool.QueryRow(
+		ctx,
+		`select provider, subject, principal_id
+		from authkit_external_identities
+		where provider = $1 and subject = $2`,
+		provider,
+		subject,
+	).Scan(&link.Provider, &link.Subject, &link.PrincipalID)
+	if err != nil {
+		return authkit.ExternalIdentity{}, err
+	}
+
+	return link, nil
+}
+
+func (s *Store) resolveIdentityLinkConflict(
+	ctx context.Context,
+	req authkit.LinkIdentityRequest,
+) (authkit.ExternalIdentity, error) {
+	link, err := s.findIdentityLink(ctx, req.Provider, req.Subject)
+	if err != nil {
+		return authkit.ExternalIdentity{}, fmt.Errorf("postgres: find identity link conflict: %w", err)
+	}
+	if link.PrincipalID == req.PrincipalID {
+		return link, nil
+	}
+
+	return authkit.ExternalIdentity{}, fmt.Errorf(
+		"postgres: identity %q/%q is already linked to principal %q",
+		req.Provider,
+		req.Subject,
+		link.PrincipalID,
+	)
+}
+
+func (s *Store) findToken(ctx context.Context, tokenID string) (apikey.StoredToken, error) {
+	var token apikey.StoredToken
+	var secretHash []byte
+	var lastUsedAt pgtype.Timestamptz
+	var revokedAt pgtype.Timestamptz
+	err := s.pool.QueryRow(
+		ctx,
+		`select id, principal_id, name, secret_hash, expires_at, last_used_at, revoked_at
+		from authkit_api_tokens
+		where id = $1`,
+		tokenID,
+	).Scan(
+		&token.ID,
+		&token.PrincipalID,
+		&token.Name,
+		&secretHash,
+		&token.ExpiresAt,
+		&lastUsedAt,
+		&revokedAt,
+	)
+	if err != nil {
+		return apikey.StoredToken{}, err
+	}
+	if len(secretHash) != sha256.Size {
+		return apikey.StoredToken{}, fmt.Errorf(
+			"postgres: token %q has invalid secret hash length %d",
+			tokenID,
+			len(secretHash),
+		)
+	}
+
+	copy(token.SecretHash[:], secretHash)
+	token.ExpiresAt = token.ExpiresAt.UTC()
+	token.LastUsedAt = timeFromTimestamptz(lastUsedAt)
+	token.RevokedAt = timeFromTimestamptz(revokedAt)
+
+	return token, nil
+}
+
+func encodeAttributes(attrs map[string]any) (string, error) {
+	if len(attrs) == 0 {
+		return "", nil
+	}
+
+	encoded, err := json.Marshal(attrs)
+	if err != nil {
+		return "", fmt.Errorf("postgres: encode principal attributes: %w", err)
+	}
+
+	return string(encoded), nil
+}
+
+func decodeAttributes(encoded string) (map[string]any, error) {
+	if encoded == "" || encoded == "null" {
+		//nolint:nilnil // Nil attributes are the normalized zero value for principals.
+		return nil, nil
+	}
+
+	var attrs map[string]any
+	if err := json.Unmarshal([]byte(encoded), &attrs); err != nil {
+		return nil, fmt.Errorf("postgres: decode principal attributes: %w", err)
+	}
+	if len(attrs) == 0 {
+		//nolint:nilnil // Nil attributes are the normalized zero value for principals.
+		return nil, nil
+	}
+
+	return attrs, nil
+}
+
+func cloneAttributes(attrs map[string]any) map[string]any {
+	if len(attrs) == 0 {
+		return nil
+	}
+
+	cloned := make(map[string]any, len(attrs))
+	maps.Copy(cloned, attrs)
+
+	return cloned
+}
+
+func timeFromTimestamptz(value pgtype.Timestamptz) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+
+	t := value.Time.UTC()
+
+	return &t
+}
+
+func isPostgresCode(err error, code string) bool {
+	var pgErr *pgconn.PgError
+
+	return errors.As(err, &pgErr) && pgErr.Code == code
+}

@@ -23,6 +23,7 @@ fileGroups:
   go:
     - '**/*.go'
     - 'go.mod'
+    - '**/*.sql'
   lintConfig:
     - '.golangci.yml'
     - '.prototools'
@@ -63,12 +64,21 @@ tasks:
     options:
       cache: false
 
+  integration:
+    command: 'go test -tags=integration ./store/postgres'
+    toolchains: ['go']
+    inputs:
+      - '@group(go)'
+    options:
+      cache: false
+
   check:
     deps:
       - 'root:format'
       - 'root:lint'
       - 'root:build'
       - 'root:test'
+      - 'root:integration'
     options:
       cache: false
       runInCI: true
