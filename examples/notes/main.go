@@ -114,7 +114,7 @@ func newNotesApp(ctx context.Context, clock func() time.Time) (*notesApp, error)
 		return nil, err
 	}
 
-	_, err = store.LinkIdentity(ctx, authkit.LinkIdentityRequest(issued.IdentityLink))
+	_, err = store.LinkIdentity(ctx, issued.IdentityLink)
 	if err != nil {
 		return nil, err
 	}

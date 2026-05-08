@@ -33,8 +33,8 @@ type IssuedToken struct {
 	// ExpiresAt is the time after which the token must no longer authenticate.
 	ExpiresAt time.Time
 
-	// IdentityLink is the explicit identity link applications can store for the token.
-	IdentityLink authkit.ExternalIdentity
+	// IdentityLink is the explicit identity-link request applications can store for the token.
+	IdentityLink authkit.LinkIdentityRequest
 }
 
 // StoredToken is the storage representation of an API token.

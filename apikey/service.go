@@ -76,7 +76,7 @@ func (s *Service) IssueToken(ctx context.Context, req IssueRequest) (IssuedToken
 		ID:        tokenID,
 		Plaintext: plaintext,
 		ExpiresAt: req.ExpiresAt,
-		IdentityLink: authkit.ExternalIdentity{
+		IdentityLink: authkit.LinkIdentityRequest{
 			Provider:    Provider,
 			Subject:     tokenID,
 			PrincipalID: req.PrincipalID,

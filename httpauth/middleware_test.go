@@ -250,7 +250,7 @@ func TestMiddlewareAuthenticatesAPITokenThroughHTTPPath(t *testing.T) {
 		ExpiresAt:   now.Add(time.Hour),
 	})
 	require.NoError(t, err)
-	_, err = store.LinkIdentity(context.Background(), authkit.LinkIdentityRequest(issued.IdentityLink))
+	_, err = store.LinkIdentity(context.Background(), issued.IdentityLink)
 	require.NoError(t, err)
 	pipeline, err := authkit.NewPipeline(authkit.PipelineOptions{
 		Authenticators: []authkit.Authenticator{tokenAuthenticator},
