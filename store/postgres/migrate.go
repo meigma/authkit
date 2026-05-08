@@ -5,6 +5,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -35,13 +36,26 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		return fmt.Errorf("postgres: acquire migration lock: %w", execErr)
 	}
 
-	sql, err := migrationFiles.ReadFile("migrations/000001_initial.sql")
+	entries, err := fs.ReadDir(migrationFiles, "migrations")
 	if err != nil {
-		return fmt.Errorf("postgres: read migration: %w", err)
+		return fmt.Errorf("postgres: read migrations: %w", err)
 	}
-	if _, err := tx.Exec(ctx, string(sql)); err != nil {
-		return fmt.Errorf("postgres: apply migration 000001_initial: %w", err)
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+		sql, err := migrationFiles.ReadFile("migrations/" + name)
+		if err != nil {
+			return fmt.Errorf("postgres: read migration %s: %w", name, err)
+		}
+		if _, err := tx.Exec(ctx, string(sql)); err != nil {
+			return fmt.Errorf("postgres: apply migration %s: %w", name, err)
+		}
 	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("postgres: commit migration: %w", err)
 	}

@@ -11,6 +11,14 @@ type ProviderSource interface {
 	FindProvider(ctx context.Context, issuer string) (Provider, error)
 }
 
+// ProviderTrustStore stores and returns trusted provider configuration.
+type ProviderTrustStore interface {
+	ProviderSource
+
+	// TrustProvider stores provider as trusted for its issuer.
+	TrustProvider(ctx context.Context, provider Provider) (Provider, error)
+}
+
 // StaticProviderSource stores trusted providers in memory.
 type StaticProviderSource struct {
 	providers map[string]Provider

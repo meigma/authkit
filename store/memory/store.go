@@ -10,17 +10,19 @@ import (
 
 	"github.com/meigma/authkit"
 	"github.com/meigma/authkit/apikey"
+	"github.com/meigma/authkit/oidc"
 )
 
 const principalIDPrefix = "principal_"
 
-// Store keeps principals and external identity links in memory.
+// Store keeps principals, external identity links, API tokens, and OIDC provider trust in memory.
 type Store struct {
 	mu                  sync.RWMutex
 	nextPrincipalNumber int
 	principals          map[string]authkit.Principal
 	links               map[identityKey]authkit.ExternalIdentity
 	tokens              map[string]apikey.StoredToken
+	providers           map[string]oidc.Provider
 }
 
 type identityKey struct {
@@ -35,6 +37,7 @@ func NewStore() *Store {
 		principals:          make(map[string]authkit.Principal),
 		links:               make(map[identityKey]authkit.ExternalIdentity),
 		tokens:              make(map[string]apikey.StoredToken),
+		providers:           make(map[string]oidc.Provider),
 	}
 }
 
@@ -149,6 +152,42 @@ func (s *Store) ResolveIdentity(ctx context.Context, identity authkit.Identity) 
 	return &resolved, nil
 }
 
+// TrustProvider stores provider as trusted for its issuer.
+func (s *Store) TrustProvider(ctx context.Context, provider oidc.Provider) (oidc.Provider, error) {
+	if err := ctx.Err(); err != nil {
+		return oidc.Provider{}, err
+	}
+	if err := provider.Validate(); err != nil {
+		return oidc.Provider{}, err
+	}
+
+	trusted := cloneProvider(provider)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.providers[trusted.Issuer] = trusted
+
+	return cloneProvider(trusted), nil
+}
+
+// FindProvider returns the trusted OIDC provider for issuer.
+func (s *Store) FindProvider(ctx context.Context, issuer string) (oidc.Provider, error) {
+	if err := ctx.Err(); err != nil {
+		return oidc.Provider{}, err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	provider, ok := s.providers[issuer]
+	if !ok {
+		return oidc.Provider{}, oidc.ErrProviderNotFound
+	}
+
+	return cloneProvider(provider), nil
+}
+
 func cloneAttributes(attrs map[string]any) map[string]any {
 	if len(attrs) == 0 {
 		return nil
@@ -164,4 +203,22 @@ func clonePrincipal(principal authkit.Principal) authkit.Principal {
 	principal.Attributes = cloneAttributes(principal.Attributes)
 
 	return principal
+}
+
+func cloneProvider(provider oidc.Provider) oidc.Provider {
+	provider.Audiences = cloneStrings(provider.Audiences)
+	provider.SupportedSigningAlgorithms = cloneStrings(provider.SupportedSigningAlgorithms)
+
+	return provider
+}
+
+func cloneStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	cloned := make([]string, len(values))
+	copy(cloned, values)
+
+	return cloned
 }

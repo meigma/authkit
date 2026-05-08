@@ -4,5 +4,6 @@
 // against explicitly trusted issuer, audience, and JWKS configuration, then
 // returns authkit identities keyed by issuer and subject. It does not implement
 // hosted browser login, OAuth authorization server behavior, auto-provisioning,
-// or permission grants from token claims.
+// or permission grants from token claims. Provider trust can come from static
+// configuration, memory or Postgres stores, or an application-owned source.
 package oidc

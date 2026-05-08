@@ -11,6 +11,7 @@ import (
 
 	"github.com/meigma/authkit"
 	"github.com/meigma/authkit/apikey"
+	"github.com/meigma/authkit/oidc"
 )
 
 const (
@@ -24,6 +25,8 @@ func TestStoreSatisfiesAuthkitContracts(t *testing.T) {
 	var _ authkit.IdentityLinker = (*Store)(nil)
 	var _ authkit.PrincipalResolver = (*Store)(nil)
 	var _ apikey.TokenStore = (*Store)(nil)
+	var _ oidc.ProviderSource = (*Store)(nil)
+	var _ oidc.ProviderTrustStore = (*Store)(nil)
 
 	require.NotNil(t, NewStore())
 }
