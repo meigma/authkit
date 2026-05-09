@@ -17,12 +17,13 @@ The first API-token prototype is present in the repository:
 - opaque API-token issuing, verification, revocation, expiration, and last-used tracking
 - router-neutral `net/http` middleware with context helpers and authorization wrappers
 - thin Casbin authorizer adapter with replaceable request projection
+- opt-in principal auto-provisioning for caller-approved external identities
 - `examples/notes`, a runnable vertical example that wires the real packages together
 - focused behavior tests around token, memory, pipeline, HTTP, Casbin, and example paths
 
 The prototype intentionally did not include production storage, OIDC/JWT
 validation, provider-trust storage, router-specific adapters, admin HTTP APIs,
-auto-provisioning, or a high-level composition builder.
+or a high-level composition builder.
 
 ## Planning Principles
 
@@ -193,7 +194,6 @@ from that integration.
 - Hosted browser login
 - OAuth authorization server behavior
 - SAML, SCIM, MFA, and user-management workflows
-- Auto-provisioning external identities
 - Built-in admin HTTP APIs
 - Router/framework-specific adapters
 - SQLite storage

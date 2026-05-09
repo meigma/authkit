@@ -29,6 +29,18 @@ Provided adapters:
 
 - `store/memory.Store`
 - `store/postgres.Store`
+- `provisioning.NewResolver`
+
+### `authkit.IdentityProvisioner`
+
+Atomically creates a principal and links an external identity, or returns the
+existing linked principal. Implement this when auto-provisioned principals live
+outside the provided stores.
+
+Provided adapters:
+
+- `store/memory.Store`
+- `store/postgres.Store`
 
 ### `authkit.Authorizer`
 
@@ -51,6 +63,13 @@ Links external identities to internal principals.
 
 The `management` package composes these ports with API-token issuing and
 revocation for setup workflows.
+
+## Auto-Provisioning
+
+`provisioning.NewResolver` wraps an existing `PrincipalResolver` with an
+`authkit.IdentityProvisioner` and a caller-supplied principal factory. The
+factory is the approval point for auto-provisioning and maps verified identity
+claims into an `authkit.CreatePrincipalRequest`.
 
 ## API Token Storage
 

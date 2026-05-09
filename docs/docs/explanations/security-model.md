@@ -35,6 +35,20 @@ application-owned `oidc.ProviderSource`.
 OIDC identities use `(issuer, subject)` as the stable key. Email is not a stable
 identity key.
 
+## Auto-Provisioning
+
+Auto-provisioning is opt in. The provisioning resolver runs only after a
+credential has authenticated and normal identity resolution reports
+`authkit.ErrUnresolvedIdentity`.
+
+Provider trust does not imply provisioning approval. Applications provide the
+factory that decides which identities may create principals and how forwarded
+claims become display names or attributes.
+
+Provisioning does not grant permissions. A newly provisioned principal still
+needs application-owned authorization policy before it can access protected
+resources.
+
 ## Fail-Closed Behavior
 
 Provider trust lookup and token validation fail closed. If authkit cannot find
@@ -62,7 +76,6 @@ authkit does not provide:
 - hosted browser login
 - OAuth authorization server behavior
 - SAML, SCIM, MFA, or user-management workflows
-- auto-provisioning of external identities
 - built-in admin HTTP APIs
 - a custom policy language or relationship graph
 

@@ -18,7 +18,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/meigma/authkit"
+	"github.com/meigma/authkit/httpauth"
 	authkitoidc "github.com/meigma/authkit/oidc"
+	"github.com/meigma/authkit/provisioning"
 	"github.com/meigma/authkit/store/memory"
 )
 
@@ -483,6 +485,97 @@ func TestValidUnlinkedOIDCIdentityReturnsUnresolvedIdentity(t *testing.T) {
 	assert.Empty(t, authentication.Principal)
 }
 
+func TestOIDCIdentityAutoProvisionsThroughResolver(t *testing.T) {
+	now := fixedTime()
+	issuer := newTestIssuer(t)
+	store := memory.NewStore()
+	authenticator := issuer.authenticator(
+		t,
+		authkitoidc.WithClock(func() time.Time {
+			return now
+		}),
+		authkitoidc.WithForwardedClaims("email", "name"),
+	)
+	resolver, err := provisioning.NewResolver(provisioning.ResolverOptions{
+		Resolver:    store,
+		Provisioner: store,
+		Factory: func(_ context.Context, identity authkit.Identity) (authkit.CreatePrincipalRequest, bool, error) {
+			if identity.Provider != issuer.issuer {
+				return authkit.CreatePrincipalRequest{}, false, nil
+			}
+
+			displayName := stringClaim(identity.Claims, "name")
+			if displayName == "" {
+				displayName = stringClaim(identity.Claims, "email")
+			}
+			if displayName == "" {
+				displayName = identity.Subject
+			}
+
+			return authkit.CreatePrincipalRequest{
+				Kind:        authkit.PrincipalKindUser,
+				DisplayName: displayName,
+				Attributes: map[string]any{
+					"email": stringClaim(identity.Claims, "email"),
+				},
+			}, true, nil
+		},
+	})
+	require.NoError(t, err)
+	pipeline := newPipeline(t, authenticator, resolver)
+	token := issuer.sign(t, tokenRequest{
+		subject:   testSubject,
+		audiences: []string{testAudience},
+		expiresAt: now.Add(time.Hour),
+		claims: map[string]any{
+			"email": "ada@example.test",
+			"name":  "Ada Lovelace",
+		},
+	})
+
+	first, err := pipeline.Authenticate(context.Background(), bearerRequest(token))
+	require.NoError(t, err)
+	second, err := pipeline.Authenticate(context.Background(), bearerRequest(token))
+	require.NoError(t, err)
+
+	assert.Equal(t, authkitoidc.Name, first.AuthenticatorName)
+	assert.Equal(t, issuer.issuer, first.Identity.Provider)
+	assert.Equal(t, testSubject, first.Identity.Subject)
+	assert.Equal(t, map[string]any{
+		"email": "ada@example.test",
+		"name":  "Ada Lovelace",
+	}, first.Identity.Claims)
+	assert.Equal(t, authkit.PrincipalKindUser, first.Principal.Kind)
+	assert.Equal(t, "Ada Lovelace", first.Principal.DisplayName)
+	assert.Equal(t, "ada@example.test", first.Principal.Attributes["email"])
+	assert.Equal(t, first.Principal, second.Principal)
+
+	resolved, err := store.ResolveIdentity(context.Background(), first.Identity)
+	require.NoError(t, err)
+	require.NotNil(t, resolved)
+	assert.Equal(t, first.Principal, *resolved)
+
+	deniedPipeline, err := authkit.NewPipeline(authkit.PipelineOptions{
+		Authenticators: []authkit.Authenticator{authenticator},
+		Resolver:       resolver,
+		Authorizer:     denyAuthorizer{},
+	})
+	require.NoError(t, err)
+	middleware, err := httpauth.NewMiddleware(deniedPipeline)
+	require.NoError(t, err)
+	handler := middleware.Require("note:read", authkit.Resource{Type: "note", ID: "allowed"})(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}),
+	)
+	req := bearerRequest(token)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusForbidden, recorder.Code)
+}
+
 type failingProviderSource struct {
 	err error
 }
@@ -646,6 +739,12 @@ func (allowAuthorizer) Can(context.Context, authkit.Principal, string, authkit.R
 	return authkit.Decision{Allowed: true}, nil
 }
 
+type denyAuthorizer struct{}
+
+func (denyAuthorizer) Can(context.Context, authkit.Principal, string, authkit.Resource) (authkit.Decision, error) {
+	return authkit.Decision{Allowed: false, Reason: "policy denied"}, nil
+}
+
 func bearerRequest(token string) *http.Request {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -655,4 +754,10 @@ func bearerRequest(token string) *http.Request {
 
 func fixedTime() time.Time {
 	return time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+}
+
+func stringClaim(claims map[string]any, name string) string {
+	value, _ := claims[name].(string)
+
+	return value
 }

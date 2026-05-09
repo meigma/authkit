@@ -36,6 +36,7 @@ Adapters sit at the edges:
 
 - `apikey` issues and verifies opaque API tokens.
 - `oidc` verifies signed JWT bearer tokens from trusted issuers.
+- `provisioning` can create principals for caller-approved unresolved identities.
 - `httpauth` adapts a pipeline to `net/http`.
 - `casbin` adapts Casbin enforcement to the `authkit.Authorizer` port.
 - `store/memory` and `store/postgres` implement storage contracts.
@@ -63,6 +64,18 @@ subject  = JWT sub
 
 A valid credential with no linked principal authenticates as a credential but
 does not become an application principal.
+
+## Auto-Provisioning
+
+Auto-provisioning is an opt-in resolver behavior. A `provisioning.Resolver`
+first tries normal identity resolution. If the identity is unresolved, it calls
+application-owned policy code to decide whether that verified identity may
+create a principal.
+
+Provisioning creates and links a principal only. It does not grant Casbin policy
+or derive authorization from JWT claims. Applications must explicitly forward
+the claims they need for display or attributes, and they remain responsible for
+permission grants.
 
 ## HTTP Runtime
 

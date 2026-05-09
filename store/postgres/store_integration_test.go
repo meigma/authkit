@@ -16,6 +16,7 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/meigma/authkit"
 	"github.com/meigma/authkit/internal/storetest"
 )
 
@@ -33,6 +34,54 @@ func TestSharedStoreBehavior(t *testing.T) {
 
 		return store
 	})
+}
+
+func TestProvisionIdentityConcurrentCallsLeaveOnePrincipal(t *testing.T) {
+	ctx := context.Background()
+	pool := newPostgresPool(t)
+	require.NoError(t, Migrate(ctx, pool))
+	store, err := NewStore(pool)
+	require.NoError(t, err)
+
+	start := make(chan struct{})
+	errs := make(chan error, 12)
+	var wg sync.WaitGroup
+	for range cap(errs) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, runErr := store.ProvisionIdentity(ctx, authkit.ProvisionIdentityRequest{
+				Identity: authkit.Identity{
+					Provider: "oidc",
+					Subject:  "user-123",
+				},
+				Principal: authkit.CreatePrincipalRequest{
+					Kind:        authkit.PrincipalKindUser,
+					DisplayName: "Ada Lovelace",
+				},
+			})
+			errs <- runErr
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	var principals int
+	err = pool.QueryRow(ctx, `select count(*) from authkit_principals`).Scan(&principals)
+	require.NoError(t, err)
+	assert.Equal(t, 1, principals)
+
+	var links int
+	err = pool.QueryRow(ctx, `select count(*) from authkit_external_identities`).Scan(&links)
+	require.NoError(t, err)
+	assert.Equal(t, 1, links)
 }
 
 func TestMigrateCreatesSchema(t *testing.T) {
