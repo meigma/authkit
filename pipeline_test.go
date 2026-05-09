@@ -35,8 +35,9 @@ func testPrincipal() authkit.Principal {
 
 func testResource() authkit.Resource {
 	return authkit.Resource{
-		Type: "note",
-		ID:   "note-1",
+		Type:       "note",
+		ID:         "note-1",
+		Attributes: map[string]any{"owner": "principal_1"},
 	}
 }
 

@@ -19,8 +19,8 @@ type HTTPOptions struct {
 	// Authorizer decides whether resolved principals may act on resources.
 	Authorizer authkit.Authorizer
 
-	// HTTPOptions configure the generated httpauth middleware.
-	HTTPOptions []httpauth.Option
+	// MiddlewareOptions configure the generated httpauth middleware.
+	MiddlewareOptions []httpauth.Option
 }
 
 // HTTP is a composed authkit HTTP setup.
@@ -48,7 +48,7 @@ func NewHTTP(opts HTTPOptions) (*HTTP, error) {
 		return nil, fmt.Errorf("compose: create pipeline: %w", err)
 	}
 
-	middleware, err := httpauth.NewMiddleware(pipeline, opts.HTTPOptions...)
+	middleware, err := httpauth.NewMiddleware(pipeline, opts.MiddlewareOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("compose: create HTTP middleware: %w", err)
 	}

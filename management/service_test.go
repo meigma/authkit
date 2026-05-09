@@ -25,11 +25,14 @@ const (
 	testPrincipalName = "deploy service"
 )
 
-func TestNewServiceValidatesOptions(t *testing.T) {
+func TestNewServiceAllowsSparseOptions(t *testing.T) {
 	tests := []struct {
 		name string
 		opts management.Options
 	}{
+		{
+			name: "no collaborators",
+		},
 		{
 			name: "missing principal creator",
 			opts: management.Options{
@@ -55,12 +58,90 @@ func TestNewServiceValidatesOptions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service, err := management.NewService(tt.opts)
+			service := management.NewService(tt.opts)
 
-			require.Error(t, err)
-			assert.Nil(t, service)
+			assert.NotNil(t, service)
 		})
 	}
+}
+
+func TestServiceCoreMethodsRequirePorts(t *testing.T) {
+	service := management.NewService(management.Options{})
+
+	tests := []struct {
+		name string
+		run  func() error
+		want string
+	}{
+		{
+			name: "create principal",
+			run: func() error {
+				_, err := service.CreatePrincipal(context.Background(), authkit.CreatePrincipalRequest{
+					Kind: authkit.PrincipalKindService,
+				})
+
+				return err
+			},
+			want: "management: principal creator is required",
+		},
+		{
+			name: "link identity",
+			run: func() error {
+				_, err := service.LinkIdentity(context.Background(), authkit.LinkIdentityRequest{
+					Provider:    testProvider,
+					Subject:     testSubject,
+					PrincipalID: testPrincipalID,
+				})
+
+				return err
+			},
+			want: "management: identity linker is required",
+		},
+		{
+			name: "issue API token missing API token service",
+			run: func() error {
+				_, err := service.IssueAPIToken(context.Background(), management.IssueAPITokenRequest{
+					PrincipalID: testPrincipalID,
+					ExpiresAt:   fixedTime().Add(time.Hour),
+				})
+
+				return err
+			},
+			want: "management: API tokens service is required",
+		},
+		{
+			name: "revoke API token",
+			run: func() error {
+				return service.RevokeAPIToken(context.Background(), testTokenID)
+			},
+			want: "management: API tokens service is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+
+			require.Error(t, err)
+			assert.EqualError(t, err, tt.want)
+		})
+	}
+}
+
+func TestServiceIssueAPITokenRequiresIdentityLinkerBeforeIssuing(t *testing.T) {
+	apiTokens := newFakeAPITokens()
+	service := management.NewService(management.Options{
+		APITokens: apiTokens,
+	})
+
+	issued, err := service.IssueAPIToken(context.Background(), management.IssueAPITokenRequest{
+		PrincipalID: testPrincipalID,
+		ExpiresAt:   fixedTime().Add(time.Hour),
+	})
+
+	require.EqualError(t, err, "management: identity linker is required")
+	assert.Empty(t, issued)
+	assert.Empty(t, apiTokens.issueRequests)
 }
 
 func TestServiceCreatePrincipal(t *testing.T) {
@@ -84,24 +165,20 @@ func TestServiceCreatePrincipal(t *testing.T) {
 }
 
 func TestNewServiceDoesNotRequireRolePorts(t *testing.T) {
-	service, err := management.NewService(management.Options{
+	service := management.NewService(management.Options{
 		PrincipalCreator: newFakePrincipalCreator(),
 		IdentityLinker:   newFakeIdentityLinker(),
 		APITokens:        newFakeAPITokens(),
 	})
-
-	require.NoError(t, err)
 	assert.NotNil(t, service)
 }
 
 func TestNewServiceDoesNotRequireProvisioningRulePorts(t *testing.T) {
-	service, err := management.NewService(management.Options{
+	service := management.NewService(management.Options{
 		PrincipalCreator: newFakePrincipalCreator(),
 		IdentityLinker:   newFakeIdentityLinker(),
 		APITokens:        newFakeAPITokens(),
 	})
-
-	require.NoError(t, err)
 	assert.NotNil(t, service)
 }
 
@@ -207,12 +284,11 @@ func TestServiceWrapsRoleErrors(t *testing.T) {
 }
 
 func TestServiceRoleMethodsRequireRolePorts(t *testing.T) {
-	service, err := management.NewService(management.Options{
+	service := management.NewService(management.Options{
 		PrincipalCreator: newFakePrincipalCreator(),
 		IdentityLinker:   newFakeIdentityLinker(),
 		APITokens:        newFakeAPITokens(),
 	})
-	require.NoError(t, err)
 
 	tests := []struct {
 		name string
@@ -379,12 +455,11 @@ func TestServiceWrapsProvisioningRuleErrors(t *testing.T) {
 }
 
 func TestServiceProvisioningRuleMethodsRequirePorts(t *testing.T) {
-	service, err := management.NewService(management.Options{
+	service := management.NewService(management.Options{
 		PrincipalCreator: newFakePrincipalCreator(),
 		IdentityLinker:   newFakeIdentityLinker(),
 		APITokens:        newFakeAPITokens(),
 	})
-	require.NoError(t, err)
 
 	tests := []struct {
 		name string
@@ -725,7 +800,6 @@ func TestServiceIssueAPITokenResolvesThroughMemoryStore(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, identity)
 	resolved, err := store.ResolveIdentity(context.Background(), *identity)
-
 	require.NoError(t, err)
 	require.NotNil(t, resolved)
 	assert.Equal(t, principal, *resolved)
@@ -756,7 +830,7 @@ func newServiceWithRoles(
 ) *management.Service {
 	t.Helper()
 
-	service, err := management.NewService(management.Options{
+	service := management.NewService(management.Options{
 		PrincipalCreator:      creator,
 		RoleCreator:           roles,
 		RoleActionGranter:     roles,
@@ -764,7 +838,6 @@ func newServiceWithRoles(
 		IdentityLinker:        linker,
 		APITokens:             apiTokens,
 	})
-	require.NoError(t, err)
 
 	return service
 }
@@ -779,7 +852,7 @@ func newServiceWithProvisioningRules(
 ) *management.Service {
 	t.Helper()
 
-	service, err := management.NewService(management.Options{
+	service := management.NewService(management.Options{
 		PrincipalCreator:        creator,
 		RoleCreator:             roles,
 		RoleActionGranter:       roles,
@@ -792,7 +865,6 @@ func newServiceWithProvisioningRules(
 		IdentityLinker:          linker,
 		APITokens:               apiTokens,
 	})
-	require.NoError(t, err)
 
 	return service
 }

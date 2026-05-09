@@ -152,6 +152,32 @@ func TestNewHTTPReturnsUsableMiddleware(t *testing.T) {
 	assert.Equal(t, "principal_test", recorder.Body.String())
 }
 
+func TestNewHTTPAppliesMiddlewareOptions(t *testing.T) {
+	kit, err := compose.NewHTTP(compose.HTTPOptions{
+		Authenticators: []compose.AuthenticatorSpec{
+			compose.Existing(newTestAuthenticator("test")),
+		},
+		Resolver:   testResolver{},
+		Authorizer: testAuthorizer{},
+		MiddlewareOptions: []httpauth.Option{
+			httpauth.WithErrorRenderer(func(w http.ResponseWriter, _ *http.Request, _ error) {
+				http.Error(w, "custom auth error", http.StatusTeapot)
+			}),
+		},
+	})
+	require.NoError(t, err)
+
+	handler := kit.Middleware.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	assert.Equal(t, http.StatusTeapot, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "custom auth error")
+}
+
 func TestAPITokenSpecBuildsUsableAuthenticator(t *testing.T) {
 	ctx := context.Background()
 	store := memory.NewStore()

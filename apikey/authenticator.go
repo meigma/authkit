@@ -43,10 +43,10 @@ func (a *Authenticator) Authenticate(ctx context.Context, req *http.Request) (*a
 	}
 
 	header := req.Header.Get("Authorization")
-	scheme, token, ok := strings.Cut(header, " ")
-	if !ok || scheme != bearerScheme || token == "" || strings.Contains(token, " ") {
+	parts := strings.Fields(header)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], bearerScheme) {
 		return nil, unauthenticated("bearer token is required")
 	}
 
-	return a.service.VerifyToken(ctx, token)
+	return a.service.VerifyToken(ctx, parts[1])
 }

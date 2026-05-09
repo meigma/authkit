@@ -71,7 +71,7 @@ initial role assignment during auto-provisioning.
 |-------|------|-------------|
 | `Type` | `string` | Resource class in application policy. |
 | `ID` | `string` | Resource instance within `Type`. |
-| `Attr` | `map[string]any` | Optional durable resource metadata. |
+| `Attributes` | `map[string]any` | Optional durable resource metadata. |
 
 ## Decision
 

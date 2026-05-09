@@ -182,6 +182,42 @@ func TestAuthenticatorAuthenticatesValidJWTBearerToken(t *testing.T) {
 	}, identity)
 }
 
+func TestAuthenticatorAcceptsBearerSchemeCaseInsensitively(t *testing.T) {
+	now := fixedTime()
+	issuer := newTestIssuer(t)
+	authenticator := issuer.authenticator(t, authkitoidc.WithClock(func() time.Time {
+		return now
+	}))
+	token := issuer.sign(t, tokenRequest{
+		subject:   testSubject,
+		audiences: []string{testAudience},
+		expiresAt: now.Add(time.Hour),
+	})
+
+	tests := []struct {
+		name   string
+		scheme string
+	}{
+		{name: "canonical", scheme: "Bearer"},
+		{name: "lowercase", scheme: "bearer"},
+		{name: "mixed case", scheme: "bEaReR"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set("Authorization", tt.scheme+" "+token)
+
+			identity, err := authenticator.Authenticate(context.Background(), req)
+
+			require.NoError(t, err)
+			require.NotNil(t, identity)
+			assert.Equal(t, issuer.issuer, identity.Provider)
+			assert.Equal(t, testSubject, identity.Subject)
+		})
+	}
+}
+
 func TestAuthenticatorForwardsSelectedVerifiedClaims(t *testing.T) {
 	now := fixedTime()
 	issuer := newTestIssuer(t)

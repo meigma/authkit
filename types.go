@@ -85,8 +85,8 @@ type Resource struct {
 	// ID identifies one resource instance within Type.
 	ID string
 
-	// Attr contains optional durable resource metadata used by authorizers.
-	Attr map[string]any
+	// Attributes contains optional durable resource metadata used by authorizers.
+	Attributes map[string]any
 }
 
 // Decision describes an authorization result.

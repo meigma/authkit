@@ -70,17 +70,7 @@ type Service struct {
 }
 
 // NewService constructs a management service from opts.
-func NewService(opts Options) (*Service, error) {
-	if opts.PrincipalCreator == nil {
-		return nil, errors.New("management: principal creator is required")
-	}
-	if opts.IdentityLinker == nil {
-		return nil, errors.New("management: identity linker is required")
-	}
-	if opts.APITokens == nil {
-		return nil, errors.New("management: API tokens service is required")
-	}
-
+func NewService(opts Options) *Service {
 	return &Service{
 		principalCreator:        opts.PrincipalCreator,
 		roleCreator:             opts.RoleCreator,
@@ -93,7 +83,7 @@ func NewService(opts Options) (*Service, error) {
 		provisioningRuleLister:  opts.ProvisioningRuleLister,
 		identityLinker:          opts.IdentityLinker,
 		apiTokens:               opts.APITokens,
-	}, nil
+	}
 }
 
 // CreatePrincipal creates an internal principal.
@@ -101,6 +91,10 @@ func (s *Service) CreatePrincipal(
 	ctx context.Context,
 	req authkit.CreatePrincipalRequest,
 ) (authkit.Principal, error) {
+	if s.principalCreator == nil {
+		return authkit.Principal{}, errors.New("management: principal creator is required")
+	}
+
 	principal, err := s.principalCreator.CreatePrincipal(ctx, req)
 	if err != nil {
 		return authkit.Principal{}, fmt.Errorf("management: create principal: %w", err)
@@ -232,6 +226,10 @@ func (s *Service) LinkIdentity(
 	ctx context.Context,
 	req authkit.LinkIdentityRequest,
 ) (authkit.ExternalIdentity, error) {
+	if s.identityLinker == nil {
+		return authkit.ExternalIdentity{}, errors.New("management: identity linker is required")
+	}
+
 	identity, err := s.identityLinker.LinkIdentity(ctx, req)
 	if err != nil {
 		return authkit.ExternalIdentity{}, fmt.Errorf("management: link identity: %w", err)
@@ -242,6 +240,13 @@ func (s *Service) LinkIdentity(
 
 // IssueAPIToken issues an API token and links its API-token identity.
 func (s *Service) IssueAPIToken(ctx context.Context, req IssueAPITokenRequest) (IssuedAPIToken, error) {
+	if s.apiTokens == nil {
+		return IssuedAPIToken{}, errors.New("management: API tokens service is required")
+	}
+	if s.identityLinker == nil {
+		return IssuedAPIToken{}, errors.New("management: identity linker is required")
+	}
+
 	issued, err := s.apiTokens.IssueToken(ctx, apikey.IssueRequest{
 		PrincipalID: req.PrincipalID,
 		Name:        req.Name,
@@ -268,6 +273,10 @@ func (s *Service) IssueAPIToken(ctx context.Context, req IssueAPITokenRequest) (
 
 // RevokeAPIToken revokes tokenID.
 func (s *Service) RevokeAPIToken(ctx context.Context, tokenID string) error {
+	if s.apiTokens == nil {
+		return errors.New("management: API tokens service is required")
+	}
+
 	if err := s.apiTokens.RevokeToken(ctx, tokenID); err != nil {
 		return fmt.Errorf("management: revoke API token: %w", err)
 	}

@@ -189,7 +189,7 @@ func TestServiceRevokeToken(t *testing.T) {
 	assert.Nil(t, identity)
 }
 
-func TestAuthenticator(t *testing.T) {
+func TestAuthenticatorAcceptsBearerSchemeCaseInsensitively(t *testing.T) {
 	now := fixedTime()
 	service, _ := newService(t, now)
 	issued := issueToken(t, service, now.Add(time.Hour))
@@ -197,14 +197,27 @@ func TestAuthenticator(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, apikey.Provider, authenticator.Name())
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "Bearer "+issued.Plaintext)
+	tests := []struct {
+		name   string
+		scheme string
+	}{
+		{name: "canonical", scheme: "Bearer"},
+		{name: "lowercase", scheme: "bearer"},
+		{name: "mixed case", scheme: "bEaReR"},
+	}
 
-	identity, err := authenticator.Authenticate(context.Background(), req)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set("Authorization", tt.scheme+" "+issued.Plaintext)
 
-	require.NoError(t, err)
-	require.NotNil(t, identity)
-	assert.Equal(t, issued.ID, identity.Subject)
+			identity, err := authenticator.Authenticate(context.Background(), req)
+
+			require.NoError(t, err)
+			require.NotNil(t, identity)
+			assert.Equal(t, issued.ID, identity.Subject)
+		})
+	}
 }
 
 func TestAuthenticatorRejectsInvalidHeaders(t *testing.T) {
