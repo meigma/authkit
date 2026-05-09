@@ -8,6 +8,9 @@ description: Reference for authkit interfaces and replaceable adapters.
 authkit is built around small interfaces. Applications can use the provided
 adapters or replace each boundary with application-owned code.
 
+For root data types and request shapes, see
+[Core contracts reference](core-contracts.md).
+
 ## Core Ports
 
 ### `authkit.Authenticator`
@@ -99,6 +102,9 @@ When configured with an `authkit.ProvisioningRuleLister`, the resolver matches
 enabled provisioning rules and passes matching local role IDs to
 `authkit.IdentityProvisioner` as initial role assignments.
 
+For setup steps, see
+[How to auto-provision OIDC principals](../how-to/auto-provision-oidc-principals.md).
+
 ## API Token Storage
 
 `apikey.TokenStore` stores token metadata and hashed secrets. Implement it when
@@ -155,6 +161,8 @@ attribute shape.
 `roleauth.NewAuthorizer` checks whether the resolved principal has the requested
 `authkit.AuthorizationCheck.Action` through admin-managed local role grants. It
 does not inspect resource metadata, facts, or external provider claims.
+
+For setup steps, see [How to configure local roles](../how-to/configure-local-roles.md).
 
 ## Composition Helper
 

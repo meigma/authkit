@@ -5,12 +5,16 @@ description: Learn the authkit request path by running the notes example.
 
 # Learn Authkit With The Notes Service
 
-In this tutorial, you will run the notes example and make authenticated requests
+In this tutorial, we will run the notes example and make authenticated requests
 through the same path a real API service uses.
 
 The example creates a service principal, issues an opaque API token, links the
 token identity to the principal, installs a Casbin policy, and protects a
 `GET /notes/{noteID}` route.
+
+This tutorial follows the minimal API-token and Casbin path. Local roles, OIDC
+auto-provisioning, and authorization facts are covered in task guides after the
+tutorial.
 
 ## Run The Example
 
@@ -22,6 +26,13 @@ go run ./examples/notes
 
 The process prints a seed API token and listens on `http://localhost:8080`.
 Keep the process running in that terminal.
+
+You should see output shaped like this:
+
+```text
+seed API token: ak_...
+listening on http://localhost:8080
+```
 
 In another terminal, put the printed token in `TOKEN`:
 
@@ -40,6 +51,12 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 The service returns the note body. This proves the request can authenticate,
 resolve to the seeded principal, pass authorization, and reach the handler.
+
+You should see:
+
+```text
+This note is readable by the seeded service principal.
+```
 
 ## Call A Denied Route
 

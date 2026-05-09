@@ -51,6 +51,17 @@ verified forwarded token claims, and do not turn raw provider groups or roles
 into permissions directly. Existing principals are not continuously reconciled
 against external identity metadata.
 
+## Claim Forwarding
+
+OIDC claim forwarding is an explicit trust boundary. The authenticator verifies
+the token first, then copies only configured claim paths into
+`authkit.Identity.Claims`.
+
+This prevents arbitrary token metadata from becoming ambient application state.
+Provisioning rules can reference only forwarded claims from the trusted provider
+configuration. A provider group or role that is not forwarded is invisible to
+authkit rule matching.
+
 ## Fail-Closed Behavior
 
 Provider trust lookup and token validation fail closed. If authkit cannot find
@@ -79,6 +90,10 @@ facts. Applications choose the facts they trust and pass them explicitly.
 Local roles are admin-managed and grant action strings to principals through
 role membership. The `roleauth` adapter checks only the principal's effective
 action set; it does not inspect resources, facts, or provider metadata.
+
+Initial role assignment from provisioning rules is a bootstrap operation, not a
+continuous external synchronization mechanism. After creation, local role
+membership is local admin-managed state.
 
 The Casbin adapter uses the principal ID as the default subject. Applications
 own Casbin models, policy design, fact projection, and policy storage.

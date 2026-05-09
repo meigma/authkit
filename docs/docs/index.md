@@ -19,6 +19,12 @@ provider, hosted login system, or policy framework.
   typical `net/http` API service.
 - [Use explicit composition](how-to/use-explicit-composition.md) if you need to
   construct authenticators, the pipeline, or middleware yourself.
+- [Configure local roles](how-to/configure-local-roles.md) if you need
+  action-based role authorization.
+- [Auto-provision OIDC principals](how-to/auto-provision-oidc-principals.md) if
+  trusted JWT identities should create local principals on first use.
+- [Supply authorization facts](how-to/supply-authorization-facts.md) if route
+  authorization needs request, tenant, or loaded resource context.
 
 ## Understand The Design
 
@@ -31,5 +37,7 @@ provider, hosted login system, or policy framework.
 
 - [Extension points](reference/extension-points.md) lists the interfaces and
   adapters applications can replace.
+- [Core contracts](reference/core-contracts.md) describes root types, request
+  shapes, facts, claim paths, and errors.
 - [Current scope and API notes](reference/deferred-scope.md) records what is
   intentionally out of scope and what applications own.

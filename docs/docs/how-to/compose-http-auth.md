@@ -10,24 +10,19 @@ boilerplate. The helper builds authenticators, an `authkit.Pipeline`, and
 `httpauth.Middleware`; your application still owns storage, provider trust,
 local role or Casbin policy setup, and management workflows.
 
-## Create The Stores And Services
+## Prerequisites
+
+- A principal resolver, such as `store/memory.Store` or `store/postgres.Store`
+- At least one authenticator source, such as an API-token service or OIDC
+  provider source
+- An authorizer, such as `roleauth.NewAuthorizer` or `casbin.NewAuthorizer`
+
+## Create The Store And Token Service
 
 ```go
 store := memory.NewStore()
 
 tokenService, err := apikey.NewService(store)
-if err != nil {
-	return err
-}
-
-managementService, err := management.NewService(management.Options{
-	PrincipalCreator:      store,
-	RoleCreator:           store,
-	RoleActionGranter:     store,
-	PrincipalRoleAssigner: store,
-	IdentityLinker:        store,
-	APITokens:             tokenService,
-})
 if err != nil {
 	return err
 }
@@ -45,11 +40,18 @@ oidcSource, err := oidc.NewStaticProviderSource(oidc.Provider{
 	Issuer:    "https://issuer.example",
 	Audiences: []string{"notes-api"},
 	JWKSURL:   "https://issuer.example/.well-known/jwks.json",
+	ForwardedClaims: []authkit.ClaimPath{
+		{"email"},
+		{"groups"},
+	},
 })
 if err != nil {
 	return err
 }
 ```
+
+For mutable provider trust and provisioning rules, see
+[How to auto-provision OIDC principals](auto-provision-oidc-principals.md).
 
 ## Configure Authorization
 
@@ -62,6 +64,8 @@ if err != nil {
 	return err
 }
 ```
+
+For role setup, see [How to configure local roles](configure-local-roles.md).
 
 For resource-aware policy, applications can own the Casbin model and policy and
 adapt an enforcer with the Casbin adapter:
@@ -79,7 +83,7 @@ if err != nil {
 kit, err := compose.NewHTTP(compose.HTTPOptions{
 	Authenticators: []compose.AuthenticatorSpec{
 		compose.APIToken(tokenService),
-		compose.OIDC(oidcSource, oidc.WithForwardedClaims("email", "name")),
+		compose.OIDC(oidcSource),
 	},
 	Resolver:   store,
 	Authorizer: authorizer,
@@ -112,6 +116,9 @@ mux.Handle(
 	})(notesHandler),
 )
 ```
+
+For fact extraction details, see
+[How to supply authorization facts](supply-authorization-facts.md).
 
 For lower-level wiring, see
 [Use explicit composition](use-explicit-composition.md).

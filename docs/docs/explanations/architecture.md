@@ -25,6 +25,17 @@ containing the principal, action, resource, and caller-supplied facts is allowed
 The invariant is credential independence: permissions attach to the internal
 principal, not to a token, JWT, email address, or provider-specific user record.
 
+## Authorization Model
+
+Authorization receives the resolved principal, an action, a resource, and
+optional decision-time facts. That shape keeps authorization independent from
+the credential that authenticated the request.
+
+authkit provides two authorizer adapters today. `roleauth` checks local
+role-derived actions. `casbin` projects the same authorization check into an
+application-owned Casbin model. Both sit behind the same `authkit.Authorizer`
+port.
+
 ## Local Roles
 
 Local roles are admin-managed authorization state. Applications define the
@@ -51,6 +62,11 @@ not become durable principal or resource metadata.
 `Principal.Attributes` remains application-owned actor metadata.
 `Resource.Attr` remains resource metadata. `AuthorizationRequest.Facts` is for
 the current decision.
+
+Facts are deliberately supplied by the route or application layer. authkit does
+not automatically turn request headers, token claims, or provider metadata into
+authorization facts because those inputs usually need application-specific
+trust and normalization decisions.
 
 ## Ports And Adapters
 
@@ -105,6 +121,12 @@ Provisioning always starts with an application-owned approval point. When a
 rule source is configured, enabled provisioning rules may add initial local
 role assignments during the same create-and-link operation. Missing claims do
 not match rules, and existing principals are not re-synced.
+
+The OIDC authenticator and provisioning resolver have separate jobs. The
+authenticator verifies the token and forwards only configured claims. The
+resolver decides whether an unresolved verified identity may become a local
+principal. Provisioning rules only inspect claims that crossed the provider's
+forwarding boundary.
 
 ## HTTP Runtime
 
