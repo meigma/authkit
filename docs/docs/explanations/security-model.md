@@ -45,9 +45,11 @@ Provider trust does not imply provisioning approval. Applications provide the
 factory that decides which identities may create principals and how forwarded
 claims become display names or attributes.
 
-Provisioning does not grant permissions. A newly provisioned principal still
-needs local role assignment, Casbin policy, or another application-owned
-authorization policy before it can access protected resources.
+Provisioning rules may assign initial local roles only when the principal is
+first created. Rules are admin-managed local policy, match exact values from
+verified forwarded token claims, and do not turn raw provider groups or roles
+into permissions directly. Existing principals are not continuously reconciled
+against external identity metadata.
 
 ## Fail-Closed Behavior
 
@@ -64,6 +66,11 @@ authkit does not grant permissions from arbitrary JWT claims. Verified claims
 can be forwarded for display, logging, or application-owned policy hooks, but
 the core authorization path is the resolved principal plus an action, resource,
 and caller-supplied facts.
+
+Trusted OIDC provider configuration controls which verified claims are exposed
+through `authkit.Identity.Claims`. A provisioning rule can reference only
+claims that provider configuration exposes. If a token omits an exposed claim,
+the rule simply does not match.
 
 Facts are decision-time context. authkit does not automatically inject HTTP
 request data, token claims, or provider-specific groups into authorization

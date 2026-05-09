@@ -3,6 +3,8 @@ package oidc
 import (
 	"net/http"
 	"time"
+
+	"github.com/meigma/authkit"
 )
 
 const (
@@ -14,7 +16,7 @@ type options struct {
 	httpClient      *http.Client
 	clock           func() time.Time
 	acceptableSkew  time.Duration
-	forwardedClaims []string
+	forwardedClaims []authkit.ClaimPath
 	keySetCacheTTL  time.Duration
 }
 
@@ -59,7 +61,17 @@ func WithAcceptableSkew(skew time.Duration) Option {
 // WithForwardedClaims selects verified JWT claims copied into authkit.Identity.Claims.
 func WithForwardedClaims(claims ...string) Option {
 	return func(opts *options) {
-		opts.forwardedClaims = cloneStrings(claims)
+		opts.forwardedClaims = make([]authkit.ClaimPath, 0, len(claims))
+		for _, claim := range claims {
+			opts.forwardedClaims = append(opts.forwardedClaims, authkit.ClaimPath{claim})
+		}
+	}
+}
+
+// WithForwardedClaimPaths selects verified nested JWT claims copied into authkit.Identity.Claims.
+func WithForwardedClaimPaths(paths ...authkit.ClaimPath) Option {
+	return func(opts *options) {
+		opts.forwardedClaims = cloneClaimPaths(paths)
 	}
 }
 

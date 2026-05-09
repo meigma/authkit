@@ -19,6 +19,7 @@ The first API-token prototype is present in the repository:
 - router-neutral `net/http` middleware with context helpers and authorization wrappers
 - thin Casbin authorizer adapter with replaceable request projection
 - opt-in principal auto-provisioning for caller-approved external identities
+- admin-managed provisioning rules for initial role assignment from verified forwarded OIDC claims
 - `examples/notes`, a runnable vertical example that wires the real packages together
 - focused behavior tests around token, memory, pipeline, HTTP, local roles, Casbin, and example paths
 
@@ -203,6 +204,6 @@ from that integration.
 - SQLite storage
 - Advanced Casbin examples or policy models
 - A custom policy language or relationship graph
-- Auto-provisioning rules that assign roles from external identity metadata
+- Continuous role synchronization from external identity metadata
 - A named action or permission type replacing raw action strings
 - v1 API stability before at least one real service integration

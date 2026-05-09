@@ -21,6 +21,7 @@ import (
 	"github.com/meigma/authkit/httpauth"
 	authkitoidc "github.com/meigma/authkit/oidc"
 	"github.com/meigma/authkit/provisioning"
+	"github.com/meigma/authkit/roleauth"
 	"github.com/meigma/authkit/store/memory"
 )
 
@@ -207,6 +208,47 @@ func TestAuthenticatorForwardsSelectedVerifiedClaims(t *testing.T) {
 	assert.Equal(t, map[string]any{
 		"email": "ada@example.com",
 		"scope": "notes:read notes:write",
+	}, identity.Claims)
+}
+
+func TestAuthenticatorForwardsProviderConfiguredClaims(t *testing.T) {
+	now := fixedTime()
+	issuer := newTestIssuer(t)
+	provider := issuer.provider()
+	provider.ForwardedClaims = []authkit.ClaimPath{
+		{"groups"},
+		{"realm_access", "roles"},
+	}
+	authenticator := newAuthenticator(
+		t,
+		provider,
+		authkitoidc.WithHTTPClient(issuer.server.Client()),
+		authkitoidc.WithClock(func() time.Time {
+			return now
+		}),
+	)
+	token := issuer.sign(t, tokenRequest{
+		subject:   testSubject,
+		audiences: []string{testAudience},
+		expiresAt: now.Add(time.Hour),
+		claims: map[string]any{
+			"groups": []string{"/engineering"},
+			"realm_access": map[string]any{
+				"roles": []string{"writer"},
+				"other": "not forwarded",
+			},
+			"department": "not-forwarded",
+		},
+	})
+
+	identity, err := authenticator.Authenticate(context.Background(), bearerRequest(token))
+
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{
+		"groups": []any{"/engineering"},
+		"realm_access": map[string]any{
+			"roles": []any{"writer"},
+		},
 	}, identity.Claims)
 }
 
@@ -576,6 +618,144 @@ func TestOIDCIdentityAutoProvisionsThroughResolver(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, recorder.Code)
 }
 
+func TestOIDCProvisioningRulesAssignInitialRoles(t *testing.T) {
+	now := fixedTime()
+	issuer := newTestIssuer(t)
+	store := memory.NewStore()
+	provider := issuer.provider()
+	provider.ForwardedClaims = []authkit.ClaimPath{{"groups"}}
+	_, err := store.TrustProvider(context.Background(), provider)
+	require.NoError(t, err)
+	_, err = store.CreateRole(context.Background(), authkit.CreateRoleRequest{
+		ID:          "notes-reader",
+		DisplayName: "Notes reader",
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.GrantRoleAction(context.Background(), authkit.GrantRoleActionRequest{
+		RoleID: "notes-reader",
+		Action: "note:read",
+	}))
+	_, err = store.CreateProvisioningRule(context.Background(), authkit.CreateProvisioningRuleRequest{
+		ID:            "engineering-readers",
+		DisplayName:   "Engineering readers",
+		Provider:      provider.Issuer,
+		ClaimPath:     authkit.ClaimPath{"groups"},
+		Values:        []string{"/engineering"},
+		AssignRoleIDs: []string{"notes-reader"},
+		Enabled:       true,
+	})
+	require.NoError(t, err)
+	authenticator, err := authkitoidc.NewAuthenticator(
+		store,
+		authkitoidc.WithHTTPClient(issuer.server.Client()),
+		authkitoidc.WithClock(func() time.Time {
+			return now
+		}),
+	)
+	require.NoError(t, err)
+	resolver, err := provisioning.NewResolver(provisioning.ResolverOptions{
+		Resolver:    store,
+		Provisioner: store,
+		Factory:     userPrincipalFactory(issuer.issuer),
+		RuleSource:  store,
+	})
+	require.NoError(t, err)
+	authorizer, err := roleauth.NewAuthorizer(store)
+	require.NoError(t, err)
+	pipeline, err := authkit.NewPipeline(authkit.PipelineOptions{
+		Authenticators: []authkit.Authenticator{authenticator},
+		Resolver:       resolver,
+		Authorizer:     authorizer,
+	})
+	require.NoError(t, err)
+	token := issuer.sign(t, tokenRequest{
+		subject:   testSubject,
+		audiences: []string{testAudience},
+		expiresAt: now.Add(time.Hour),
+		claims: map[string]any{
+			"groups": []string{"/engineering"},
+		},
+	})
+
+	authorization, err := pipeline.Authorize(context.Background(), bearerRequest(token), authkit.AuthorizationRequest{
+		Action:   "note:read",
+		Resource: authkit.Resource{Type: "note", ID: "example"},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, authorization.Decision.Allowed)
+	assert.Equal(t, map[string]any{
+		"groups": []any{"/engineering"},
+	}, authorization.Authentication.Identity.Claims)
+}
+
+func TestOIDCProvisioningRulesDoNotAssignRolesWhenClaimIsMissing(t *testing.T) {
+	now := fixedTime()
+	issuer := newTestIssuer(t)
+	store := memory.NewStore()
+	provider := issuer.provider()
+	provider.ForwardedClaims = []authkit.ClaimPath{{"groups"}}
+	_, err := store.TrustProvider(context.Background(), provider)
+	require.NoError(t, err)
+	_, err = store.CreateRole(context.Background(), authkit.CreateRoleRequest{
+		ID:          "notes-reader",
+		DisplayName: "Notes reader",
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.GrantRoleAction(context.Background(), authkit.GrantRoleActionRequest{
+		RoleID: "notes-reader",
+		Action: "note:read",
+	}))
+	_, err = store.CreateProvisioningRule(context.Background(), authkit.CreateProvisioningRuleRequest{
+		ID:            "engineering-readers",
+		DisplayName:   "Engineering readers",
+		Provider:      provider.Issuer,
+		ClaimPath:     authkit.ClaimPath{"groups"},
+		Values:        []string{"/engineering"},
+		AssignRoleIDs: []string{"notes-reader"},
+		Enabled:       true,
+	})
+	require.NoError(t, err)
+	authenticator, err := authkitoidc.NewAuthenticator(
+		store,
+		authkitoidc.WithHTTPClient(issuer.server.Client()),
+		authkitoidc.WithClock(func() time.Time {
+			return now
+		}),
+	)
+	require.NoError(t, err)
+	resolver, err := provisioning.NewResolver(provisioning.ResolverOptions{
+		Resolver:    store,
+		Provisioner: store,
+		Factory:     userPrincipalFactory(issuer.issuer),
+		RuleSource:  store,
+	})
+	require.NoError(t, err)
+	authorizer, err := roleauth.NewAuthorizer(store)
+	require.NoError(t, err)
+	pipeline, err := authkit.NewPipeline(authkit.PipelineOptions{
+		Authenticators: []authkit.Authenticator{authenticator},
+		Resolver:       resolver,
+		Authorizer:     authorizer,
+	})
+	require.NoError(t, err)
+	token := issuer.sign(t, tokenRequest{
+		subject:   testSubject,
+		audiences: []string{testAudience},
+		expiresAt: now.Add(time.Hour),
+	})
+
+	authorization, err := pipeline.Authorize(context.Background(), bearerRequest(token), authkit.AuthorizationRequest{
+		Action:   "note:read",
+		Resource: authkit.Resource{Type: "note", ID: "example"},
+	})
+
+	require.ErrorIs(t, err, authkit.ErrUnauthorized)
+	assert.False(t, authorization.Decision.Allowed)
+	assert.Nil(t, authorization.Authentication.Identity.Claims)
+	assert.NotEmpty(t, authorization.Authentication.Principal.ID)
+}
+
 type failingProviderSource struct {
 	err error
 }
@@ -699,6 +879,21 @@ func (i *testIssuer) sign(t *testing.T, req tokenRequest) string {
 	require.NoError(t, err)
 
 	return string(signed)
+}
+
+func userPrincipalFactory(
+	issuer string,
+) func(context.Context, authkit.Identity) (authkit.CreatePrincipalRequest, bool, error) {
+	return func(_ context.Context, identity authkit.Identity) (authkit.CreatePrincipalRequest, bool, error) {
+		if identity.Provider != issuer {
+			return authkit.CreatePrincipalRequest{}, false, nil
+		}
+
+		return authkit.CreatePrincipalRequest{
+			Kind:        authkit.PrincipalKindUser,
+			DisplayName: identity.Subject,
+		}, true, nil
+	}
 }
 
 func newAuthenticator(

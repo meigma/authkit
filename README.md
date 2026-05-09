@@ -14,11 +14,11 @@ Included now:
 - core `authkit` identity, principal, resource, decision, authorization fact, and port contracts
 - an explicit `Identity -> Principal -> Authorizer` pipeline
 - opaque API-token issuing, verification, revocation, expiration, and last-used tracking
-- memory-backed principal, role, identity-link, API-token, and OIDC provider-trust storage
-- Postgres-backed principal, role, identity-link, API-token, and OIDC provider-trust storage
-- Go-level management service for principal, role, identity-link, and API-token setup flows
+- memory-backed principal, role, provisioning-rule, identity-link, API-token, and OIDC provider-trust storage
+- Postgres-backed principal, role, provisioning-rule, identity-link, API-token, and OIDC provider-trust storage
+- Go-level management service for principal, role, provisioning-rule, identity-link, and API-token setup flows
 - OIDC-issued JWT bearer-token authentication from static, memory, Postgres, or app-owned trusted-provider sources
-- opt-in principal auto-provisioning for caller-approved external identities
+- opt-in principal auto-provisioning for caller-approved external identities and admin-configured initial role assignment
 - `net/http` middleware with context helpers and authorization wrappers
 - optional `httpfacts` helpers for deriving decision-time facts from HTTP requests
 - thin HTTP composition helpers for common authenticator, pipeline, and middleware wiring

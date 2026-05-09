@@ -94,6 +94,17 @@ func TestNewServiceDoesNotRequireRolePorts(t *testing.T) {
 	assert.NotNil(t, service)
 }
 
+func TestNewServiceDoesNotRequireProvisioningRulePorts(t *testing.T) {
+	service, err := management.NewService(management.Options{
+		PrincipalCreator: newFakePrincipalCreator(),
+		IdentityLinker:   newFakeIdentityLinker(),
+		APITokens:        newFakeAPITokens(),
+	})
+
+	require.NoError(t, err)
+	assert.NotNil(t, service)
+}
+
 func TestServiceCreateRole(t *testing.T) {
 	roles := newFakeRoleStore()
 	roles.role = authkit.Role{
@@ -233,6 +244,194 @@ func TestServiceRoleMethodsRequireRolePorts(t *testing.T) {
 					PrincipalID: testPrincipalID,
 					RoleID:      "notes-reader",
 				})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Error(t, tt.run())
+		})
+	}
+}
+
+func TestServiceProvisioningRuleMethods(t *testing.T) {
+	rules := newFakeProvisioningRuleStore()
+	rules.rule = provisioningRule()
+	service := newServiceWithProvisioningRules(
+		t,
+		newFakePrincipalCreator(),
+		newFakeRoleStore(),
+		rules,
+		newFakeIdentityLinker(),
+		newFakeAPITokens(),
+	)
+	createReq := authkit.CreateProvisioningRuleRequest{
+		ID:            rules.rule.ID,
+		DisplayName:   rules.rule.DisplayName,
+		Provider:      rules.rule.Provider,
+		ClaimPath:     rules.rule.ClaimPath,
+		Values:        rules.rule.Values,
+		AssignRoleIDs: rules.rule.AssignRoleIDs,
+		Enabled:       rules.rule.Enabled,
+	}
+	updateReq := authkit.UpdateProvisioningRuleRequest{
+		ID:            rules.rule.ID,
+		DisplayName:   "Updated",
+		Provider:      rules.rule.Provider,
+		ClaimPath:     rules.rule.ClaimPath,
+		Values:        rules.rule.Values,
+		AssignRoleIDs: rules.rule.AssignRoleIDs,
+		Enabled:       false,
+	}
+
+	created, err := service.CreateProvisioningRule(context.Background(), createReq)
+	require.NoError(t, err)
+	assert.Equal(t, rules.rule, created)
+	assert.Equal(t, []authkit.CreateProvisioningRuleRequest{createReq}, rules.createRequests)
+
+	updated, err := service.UpdateProvisioningRule(context.Background(), updateReq)
+	require.NoError(t, err)
+	assert.Equal(t, rules.rule, updated)
+	assert.Equal(t, []authkit.UpdateProvisioningRuleRequest{updateReq}, rules.updateRequests)
+
+	found, err := service.FindProvisioningRule(context.Background(), rules.rule.ID)
+	require.NoError(t, err)
+	assert.Equal(t, rules.rule, found)
+	assert.Equal(t, []string{rules.rule.ID}, rules.findIDs)
+
+	listed, err := service.ListProvisioningRules(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []authkit.ProvisioningRule{rules.rule}, listed)
+	assert.Equal(t, 1, rules.listCalls)
+
+	require.NoError(t, service.DeleteProvisioningRule(context.Background(), rules.rule.ID))
+	assert.Equal(t, []string{rules.rule.ID}, rules.deleteIDs)
+}
+
+func TestServiceWrapsProvisioningRuleErrors(t *testing.T) {
+	ruleErr := errors.New("rule failed")
+
+	tests := []struct {
+		name string
+		run  func(*management.Service) error
+	}{
+		{
+			name: "create",
+			run: func(service *management.Service) error {
+				_, err := service.CreateProvisioningRule(context.Background(), authkit.CreateProvisioningRuleRequest{
+					ID: "engineering-readers",
+				})
+
+				return err
+			},
+		},
+		{
+			name: "update",
+			run: func(service *management.Service) error {
+				_, err := service.UpdateProvisioningRule(context.Background(), authkit.UpdateProvisioningRuleRequest{
+					ID: "engineering-readers",
+				})
+
+				return err
+			},
+		},
+		{
+			name: "delete",
+			run: func(service *management.Service) error {
+				return service.DeleteProvisioningRule(context.Background(), "engineering-readers")
+			},
+		},
+		{
+			name: "find",
+			run: func(service *management.Service) error {
+				_, err := service.FindProvisioningRule(context.Background(), "engineering-readers")
+
+				return err
+			},
+		},
+		{
+			name: "list",
+			run: func(service *management.Service) error {
+				_, err := service.ListProvisioningRules(context.Background())
+
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rules := newFakeProvisioningRuleStore()
+			rules.err = ruleErr
+			service := newServiceWithProvisioningRules(
+				t,
+				newFakePrincipalCreator(),
+				newFakeRoleStore(),
+				rules,
+				newFakeIdentityLinker(),
+				newFakeAPITokens(),
+			)
+
+			require.ErrorIs(t, tt.run(service), ruleErr)
+		})
+	}
+}
+
+func TestServiceProvisioningRuleMethodsRequirePorts(t *testing.T) {
+	service, err := management.NewService(management.Options{
+		PrincipalCreator: newFakePrincipalCreator(),
+		IdentityLinker:   newFakeIdentityLinker(),
+		APITokens:        newFakeAPITokens(),
+	})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "create",
+			run: func() error {
+				_, runErr := service.CreateProvisioningRule(
+					context.Background(),
+					authkit.CreateProvisioningRuleRequest{},
+				)
+
+				return runErr
+			},
+		},
+		{
+			name: "update",
+			run: func() error {
+				_, runErr := service.UpdateProvisioningRule(
+					context.Background(),
+					authkit.UpdateProvisioningRuleRequest{},
+				)
+
+				return runErr
+			},
+		},
+		{
+			name: "delete",
+			run: func() error {
+				return service.DeleteProvisioningRule(context.Background(), "engineering-readers")
+			},
+		},
+		{
+			name: "find",
+			run: func() error {
+				_, runErr := service.FindProvisioningRule(context.Background(), "engineering-readers")
+
+				return runErr
+			},
+		},
+		{
+			name: "list",
+			run: func() error {
+				_, runErr := service.ListProvisioningRules(context.Background())
+
+				return runErr
 			},
 		},
 	}
@@ -439,6 +638,44 @@ func TestServicePropagatesContextCancellation(t *testing.T) {
 			},
 		},
 		{
+			name: "create provisioning rule",
+			run: func() error {
+				_, runErr := service.CreateProvisioningRule(ctx, authkit.CreateProvisioningRuleRequest{})
+
+				return runErr
+			},
+		},
+		{
+			name: "update provisioning rule",
+			run: func() error {
+				_, runErr := service.UpdateProvisioningRule(ctx, authkit.UpdateProvisioningRuleRequest{})
+
+				return runErr
+			},
+		},
+		{
+			name: "delete provisioning rule",
+			run: func() error {
+				return service.DeleteProvisioningRule(ctx, "engineering-readers")
+			},
+		},
+		{
+			name: "find provisioning rule",
+			run: func() error {
+				_, runErr := service.FindProvisioningRule(ctx, "engineering-readers")
+
+				return runErr
+			},
+		},
+		{
+			name: "list provisioning rules",
+			run: func() error {
+				_, runErr := service.ListProvisioningRules(ctx)
+
+				return runErr
+			},
+		},
+		{
 			name: "issue API token",
 			run: func() error {
 				_, runErr := service.IssueAPIToken(ctx, management.IssueAPITokenRequest{
@@ -532,6 +769,34 @@ func newServiceWithRoles(
 	return service
 }
 
+func newServiceWithProvisioningRules(
+	t *testing.T,
+	creator authkit.PrincipalCreator,
+	roles roleStore,
+	rules provisioningRuleStore,
+	linker authkit.IdentityLinker,
+	apiTokens management.APITokens,
+) *management.Service {
+	t.Helper()
+
+	service, err := management.NewService(management.Options{
+		PrincipalCreator:        creator,
+		RoleCreator:             roles,
+		RoleActionGranter:       roles,
+		PrincipalRoleAssigner:   roles,
+		ProvisioningRuleCreator: rules,
+		ProvisioningRuleUpdater: rules,
+		ProvisioningRuleDeleter: rules,
+		ProvisioningRuleFinder:  rules,
+		ProvisioningRuleLister:  rules,
+		IdentityLinker:          linker,
+		APITokens:               apiTokens,
+	})
+	require.NoError(t, err)
+
+	return service
+}
+
 func newManagementService(
 	t *testing.T,
 	store *memory.Store,
@@ -539,13 +804,21 @@ func newManagementService(
 ) *management.Service {
 	t.Helper()
 
-	return newServiceWithRoles(t, store, store, store, tokenService)
+	return newServiceWithProvisioningRules(t, store, store, store, store, tokenService)
 }
 
 type roleStore interface {
 	authkit.RoleCreator
 	authkit.RoleActionGranter
 	authkit.PrincipalRoleAssigner
+}
+
+type provisioningRuleStore interface {
+	authkit.ProvisioningRuleCreator
+	authkit.ProvisioningRuleUpdater
+	authkit.ProvisioningRuleDeleter
+	authkit.ProvisioningRuleFinder
+	authkit.ProvisioningRuleLister
 }
 
 func newFakePrincipalCreator() *fakePrincipalCreator {
@@ -560,12 +833,28 @@ func newFakeRoleStore() *fakeRoleStore {
 	return &fakeRoleStore{}
 }
 
+func newFakeProvisioningRuleStore() *fakeProvisioningRuleStore {
+	return &fakeProvisioningRuleStore{}
+}
+
 func newFakeAPITokens() *fakeAPITokens {
 	return &fakeAPITokens{}
 }
 
 func fixedTime() time.Time {
 	return time.Date(2026, time.May, 8, 12, 0, 0, 0, time.UTC)
+}
+
+func provisioningRule() authkit.ProvisioningRule {
+	return authkit.ProvisioningRule{
+		ID:            "engineering-readers",
+		DisplayName:   "Engineering readers",
+		Provider:      "https://issuer.example",
+		ClaimPath:     authkit.ClaimPath{"groups"},
+		Values:        []string{"/engineering"},
+		AssignRoleIDs: []string{"notes-reader"},
+		Enabled:       true,
+	}
 }
 
 type fakePrincipalCreator struct {
@@ -646,6 +935,72 @@ func (f *fakeRoleStore) AssignPrincipalRole(
 	}
 
 	return nil
+}
+
+type fakeProvisioningRuleStore struct {
+	createRequests []authkit.CreateProvisioningRuleRequest
+	updateRequests []authkit.UpdateProvisioningRuleRequest
+	deleteIDs      []string
+	findIDs        []string
+	listCalls      int
+	rule           authkit.ProvisioningRule
+	err            error
+}
+
+func (f *fakeProvisioningRuleStore) CreateProvisioningRule(
+	_ context.Context,
+	req authkit.CreateProvisioningRuleRequest,
+) (authkit.ProvisioningRule, error) {
+	f.createRequests = append(f.createRequests, req)
+	if f.err != nil {
+		return authkit.ProvisioningRule{}, f.err
+	}
+
+	return f.rule, nil
+}
+
+func (f *fakeProvisioningRuleStore) UpdateProvisioningRule(
+	_ context.Context,
+	req authkit.UpdateProvisioningRuleRequest,
+) (authkit.ProvisioningRule, error) {
+	f.updateRequests = append(f.updateRequests, req)
+	if f.err != nil {
+		return authkit.ProvisioningRule{}, f.err
+	}
+
+	return f.rule, nil
+}
+
+func (f *fakeProvisioningRuleStore) DeleteProvisioningRule(_ context.Context, id string) error {
+	f.deleteIDs = append(f.deleteIDs, id)
+	if f.err != nil {
+		return f.err
+	}
+
+	return nil
+}
+
+func (f *fakeProvisioningRuleStore) FindProvisioningRule(
+	_ context.Context,
+	id string,
+) (authkit.ProvisioningRule, error) {
+	f.findIDs = append(f.findIDs, id)
+	if f.err != nil {
+		return authkit.ProvisioningRule{}, f.err
+	}
+
+	return f.rule, nil
+}
+
+func (f *fakeProvisioningRuleStore) ListProvisioningRules(
+	context.Context,
+) ([]authkit.ProvisioningRule, error) {
+	f.listCalls++
+	if f.err != nil {
+		return nil, f.err
+	}
+
+	return []authkit.ProvisioningRule{f.rule}, nil
 }
 
 type fakeAPITokens struct {

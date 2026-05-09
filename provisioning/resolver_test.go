@@ -125,6 +125,49 @@ func TestResolverProvisionsAllowedUnresolvedIdentity(t *testing.T) {
 	}}, provisioner.requests)
 }
 
+func TestResolverAssignsInitialRolesFromProvisioningRules(t *testing.T) {
+	inner := &fakeResolver{err: errUnresolved}
+	provisioner := &fakeProvisioner{
+		result: authkit.ProvisionIdentityResult{
+			Principal: testPrincipal(),
+			Link: authkit.ExternalIdentity{
+				Provider:    testIdentity().Provider,
+				Subject:     testIdentity().Subject,
+				PrincipalID: testPrincipal().ID,
+			},
+			Created: true,
+		},
+	}
+	resolver, err := provisioning.NewResolver(provisioning.ResolverOptions{
+		Resolver:    inner,
+		Provisioner: provisioner,
+		Factory:     allowFactory,
+		RuleSource: &fakeRuleSource{
+			rules: []authkit.ProvisioningRule{
+				{
+					ID:            "engineering-readers",
+					Provider:      testIdentity().Provider,
+					ClaimPath:     authkit.ClaimPath{"groups"},
+					Values:        []string{"/engineering"},
+					AssignRoleIDs: []string{"reader"},
+					Enabled:       true,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	principal, err := resolver.ResolveIdentity(context.Background(), testIdentity())
+
+	require.NoError(t, err)
+	require.NotNil(t, principal)
+	assert.Equal(t, []authkit.ProvisionIdentityRequest{{
+		Identity:       testIdentity(),
+		Principal:      testPrincipalRequest(),
+		InitialRoleIDs: []string{"reader"},
+	}}, provisioner.requests)
+}
+
 func TestResolverPreservesUnresolvedIdentityWhenFactoryDenies(t *testing.T) {
 	provisioner := &fakeProvisioner{}
 	resolver := newResolver(t, &fakeResolver{err: errUnresolved}, provisioner, func(
@@ -137,6 +180,24 @@ func TestResolverPreservesUnresolvedIdentityWhenFactoryDenies(t *testing.T) {
 	principal, err := resolver.ResolveIdentity(context.Background(), testIdentity())
 
 	require.ErrorIs(t, err, authkit.ErrUnresolvedIdentity)
+	assert.Nil(t, principal)
+	assert.Empty(t, provisioner.requests)
+}
+
+func TestResolverReturnsRuleSourceError(t *testing.T) {
+	ruleErr := errors.New("rules unavailable")
+	provisioner := &fakeProvisioner{}
+	resolver, err := provisioning.NewResolver(provisioning.ResolverOptions{
+		Resolver:    &fakeResolver{err: errUnresolved},
+		Provisioner: provisioner,
+		Factory:     allowFactory,
+		RuleSource:  &fakeRuleSource{err: ruleErr},
+	})
+	require.NoError(t, err)
+
+	principal, err := resolver.ResolveIdentity(context.Background(), testIdentity())
+
+	require.ErrorIs(t, err, ruleErr)
 	assert.Nil(t, principal)
 	assert.Empty(t, provisioner.requests)
 }
@@ -185,6 +246,73 @@ func TestResolverDoesNotProvisionUnexpectedResolverErrors(t *testing.T) {
 	assert.Empty(t, provisioner.requests)
 }
 
+func TestMatchRules(t *testing.T) {
+	identity := authkit.Identity{
+		Provider: "https://issuer.example",
+		Subject:  "user-123",
+		Claims: map[string]any{
+			"email":  "ada@example.test",
+			"groups": []any{"/engineering", "/platform"},
+			"realm_access": map[string]any{
+				"roles": []string{"writer", "admin"},
+			},
+		},
+	}
+	rules := []authkit.ProvisioningRule{
+		{
+			ID:            "disabled",
+			Provider:      identity.Provider,
+			ClaimPath:     authkit.ClaimPath{"groups"},
+			Values:        []string{"/engineering"},
+			AssignRoleIDs: []string{"disabled"},
+		},
+		{
+			ID:            "provider-mismatch",
+			Provider:      "https://other.example",
+			ClaimPath:     authkit.ClaimPath{"groups"},
+			Values:        []string{"/engineering"},
+			AssignRoleIDs: []string{"other"},
+			Enabled:       true,
+		},
+		{
+			ID:            "missing-claim",
+			Provider:      identity.Provider,
+			ClaimPath:     authkit.ClaimPath{"department"},
+			Values:        []string{"engineering"},
+			AssignRoleIDs: []string{"department"},
+			Enabled:       true,
+		},
+		{
+			ID:            "string-match",
+			Provider:      identity.Provider,
+			ClaimPath:     authkit.ClaimPath{"email"},
+			Values:        []string{"ada@example.test"},
+			AssignRoleIDs: []string{"profiled"},
+			Enabled:       true,
+		},
+		{
+			ID:            "list-match",
+			Provider:      identity.Provider,
+			ClaimPath:     authkit.ClaimPath{"groups"},
+			Values:        []string{"/engineering"},
+			AssignRoleIDs: []string{"reader", "profiled"},
+			Enabled:       true,
+		},
+		{
+			ID:            "nested-list-match",
+			Provider:      identity.Provider,
+			ClaimPath:     authkit.ClaimPath{"realm_access", "roles"},
+			Values:        []string{"writer"},
+			AssignRoleIDs: []string{"writer"},
+			Enabled:       true,
+		},
+	}
+
+	roleIDs := provisioning.MatchRules(identity, rules)
+
+	assert.Equal(t, []string{"profiled", "reader", "writer"}, roleIDs)
+}
+
 func newResolver(
 	t *testing.T,
 	inner authkit.PrincipalResolver,
@@ -213,6 +341,9 @@ func testIdentity() authkit.Identity {
 		Subject:  "user-123",
 		Claims: map[string]any{
 			"email": "ada@example.test",
+			"groups": []any{
+				"/engineering",
+			},
 		},
 	}
 }
@@ -272,4 +403,17 @@ func (p *fakeProvisioner) ProvisionIdentity(
 	}
 
 	return p.result, nil
+}
+
+type fakeRuleSource struct {
+	rules []authkit.ProvisioningRule
+	err   error
+}
+
+func (s *fakeRuleSource) ListProvisioningRules(context.Context) ([]authkit.ProvisioningRule, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+
+	return s.rules, nil
 }

@@ -44,6 +44,54 @@ type AssignPrincipalRoleRequest struct {
 	RoleID string
 }
 
+// CreateProvisioningRuleRequest describes a request to create a provisioning rule.
+type CreateProvisioningRuleRequest struct {
+	// ID is the stable application-owned provisioning rule identifier.
+	ID string
+
+	// DisplayName is a human-readable rule label.
+	DisplayName string
+
+	// Provider identifies the trusted identity provider this rule applies to.
+	Provider string
+
+	// ClaimPath identifies the forwarded identity claim inspected by this rule.
+	ClaimPath ClaimPath
+
+	// Values are exact claim values that satisfy this rule.
+	Values []string
+
+	// AssignRoleIDs are local role IDs assigned when this rule matches.
+	AssignRoleIDs []string
+
+	// Enabled controls whether this rule participates in runtime provisioning.
+	Enabled bool
+}
+
+// UpdateProvisioningRuleRequest describes a request to replace a provisioning rule.
+type UpdateProvisioningRuleRequest struct {
+	// ID identifies the provisioning rule to update.
+	ID string
+
+	// DisplayName is a human-readable rule label.
+	DisplayName string
+
+	// Provider identifies the trusted identity provider this rule applies to.
+	Provider string
+
+	// ClaimPath identifies the forwarded identity claim inspected by this rule.
+	ClaimPath ClaimPath
+
+	// Values are exact claim values that satisfy this rule.
+	Values []string
+
+	// AssignRoleIDs are local role IDs assigned when this rule matches.
+	AssignRoleIDs []string
+
+	// Enabled controls whether this rule participates in runtime provisioning.
+	Enabled bool
+}
+
 // LinkIdentityRequest describes a request to link an external identity to a principal.
 type LinkIdentityRequest struct {
 	// Provider identifies the authority or credential class for the identity.
@@ -63,6 +111,9 @@ type ProvisionIdentityRequest struct {
 
 	// Principal describes the internal principal to create when Identity is not linked.
 	Principal CreatePrincipalRequest
+
+	// InitialRoleIDs are local roles assigned only when a new principal is created.
+	InitialRoleIDs []string
 }
 
 // ProvisionIdentityResult describes the outcome of provisioning an identity.
@@ -105,6 +156,36 @@ type PrincipalRoleAssigner interface {
 type PrincipalActionResolver interface {
 	// ResolvePrincipalActions returns the distinct actions granted to principalID.
 	ResolvePrincipalActions(ctx context.Context, principalID string) ([]string, error)
+}
+
+// ProvisioningRuleCreator creates admin-managed provisioning rules.
+type ProvisioningRuleCreator interface {
+	// CreateProvisioningRule creates a provisioning rule from req.
+	CreateProvisioningRule(ctx context.Context, req CreateProvisioningRuleRequest) (ProvisioningRule, error)
+}
+
+// ProvisioningRuleUpdater updates admin-managed provisioning rules.
+type ProvisioningRuleUpdater interface {
+	// UpdateProvisioningRule replaces a provisioning rule from req.
+	UpdateProvisioningRule(ctx context.Context, req UpdateProvisioningRuleRequest) (ProvisioningRule, error)
+}
+
+// ProvisioningRuleDeleter deletes admin-managed provisioning rules.
+type ProvisioningRuleDeleter interface {
+	// DeleteProvisioningRule deletes the provisioning rule identified by id.
+	DeleteProvisioningRule(ctx context.Context, id string) error
+}
+
+// ProvisioningRuleFinder finds admin-managed provisioning rules.
+type ProvisioningRuleFinder interface {
+	// FindProvisioningRule returns the provisioning rule identified by id.
+	FindProvisioningRule(ctx context.Context, id string) (ProvisioningRule, error)
+}
+
+// ProvisioningRuleLister lists admin-managed provisioning rules.
+type ProvisioningRuleLister interface {
+	// ListProvisioningRules returns all provisioning rules.
+	ListProvisioningRules(ctx context.Context) ([]ProvisioningRule, error)
 }
 
 // IdentityLinker links external identities to internal principals.

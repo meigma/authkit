@@ -14,4 +14,7 @@ var (
 
 	// ErrInternal indicates an auth pipeline failure that should be treated as internal.
 	ErrInternal = errors.New("authkit: internal failure")
+
+	// ErrProvisioningRuleNotFound indicates that a provisioning rule does not exist.
+	ErrProvisioningRuleNotFound = errors.New("authkit: provisioning rule not found")
 )

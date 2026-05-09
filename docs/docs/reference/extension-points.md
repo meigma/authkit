@@ -75,6 +75,12 @@ Assigns principals to local roles.
 
 Resolves a principal's effective action strings from local role membership.
 
+### `authkit.ProvisioningRuleCreator` And Related Ports
+
+Create, update, delete, find, and list admin-managed provisioning rules.
+Applications can expose these through their own admin endpoints, CLIs, seed
+scripts, or migrations.
+
 ### `authkit.IdentityLinker`
 
 Links external identities to internal principals.
@@ -88,6 +94,10 @@ revocation for setup workflows.
 `authkit.IdentityProvisioner` and a caller-supplied principal factory. The
 factory is the approval point for auto-provisioning and maps verified identity
 claims into an `authkit.CreatePrincipalRequest`.
+
+When configured with an `authkit.ProvisioningRuleLister`, the resolver matches
+enabled provisioning rules and passes matching local role IDs to
+`authkit.IdentityProvisioner` as initial role assignments.
 
 ## API Token Storage
 
@@ -103,6 +113,11 @@ Provided adapters:
 
 `oidc.ProviderSource` returns trusted provider configuration for an issuer.
 `oidc.ProviderTrustStore` adds mutation for setup flows.
+
+Trusted provider configuration can include forwarded claim paths. The OIDC
+authenticator copies only those verified claims, plus any static claims selected
+with `oidc.WithForwardedClaims` or `oidc.WithForwardedClaimPaths`, into
+`authkit.Identity.Claims`.
 
 Provided sources:
 

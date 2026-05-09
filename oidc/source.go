@@ -3,6 +3,9 @@ package oidc
 import (
 	"context"
 	"fmt"
+	"strings"
+
+	"github.com/meigma/authkit"
 )
 
 // ProviderSource returns trusted provider configuration for an issuer.
@@ -64,6 +67,7 @@ func (s *StaticProviderSource) FindProvider(ctx context.Context, issuer string) 
 func cloneProvider(provider Provider) Provider {
 	provider.Audiences = cloneStrings(provider.Audiences)
 	provider.SupportedSigningAlgorithms = cloneStrings(provider.SupportedSigningAlgorithms)
+	provider.ForwardedClaims = cloneClaimPaths(provider.ForwardedClaims)
 
 	return provider
 }
@@ -77,4 +81,59 @@ func cloneStrings(values []string) []string {
 	copy(cloned, values)
 
 	return cloned
+}
+
+func cloneClaimPaths(paths []authkit.ClaimPath) []authkit.ClaimPath {
+	if len(paths) == 0 {
+		return nil
+	}
+
+	cloned := make([]authkit.ClaimPath, len(paths))
+	for i, path := range paths {
+		cloned[i] = cloneClaimPath(path)
+	}
+
+	return cloned
+}
+
+func cloneClaimPath(path authkit.ClaimPath) authkit.ClaimPath {
+	if len(path) == 0 {
+		return nil
+	}
+
+	cloned := make(authkit.ClaimPath, len(path))
+	copy(cloned, path)
+
+	return cloned
+}
+
+func claimPathKey(path authkit.ClaimPath) string {
+	if !path.Valid() {
+		return ""
+	}
+
+	return strings.Join(path, "\x00")
+}
+
+func cloneClaimValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		cloned := make(map[string]any, len(typed))
+		for key, item := range typed {
+			cloned[key] = cloneClaimValue(item)
+		}
+
+		return cloned
+	case []any:
+		cloned := make([]any, len(typed))
+		for i, item := range typed {
+			cloned[i] = cloneClaimValue(item)
+		}
+
+		return cloned
+	case []string:
+		return cloneStrings(typed)
+	default:
+		return value
+	}
 }
