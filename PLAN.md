@@ -13,13 +13,14 @@ The first API-token prototype is present in the repository:
 
 - core `authkit` identity, principal, resource, decision, authorization fact, and port contracts
 - explicit `Identity -> Principal -> Authorizer` request pipeline
-- memory-backed principal, identity-link, and API-token storage
+- memory-backed principal, local-role, identity-link, and API-token storage
+- local role authorization from effective action grants
 - opaque API-token issuing, verification, revocation, expiration, and last-used tracking
 - router-neutral `net/http` middleware with context helpers and authorization wrappers
 - thin Casbin authorizer adapter with replaceable request projection
 - opt-in principal auto-provisioning for caller-approved external identities
 - `examples/notes`, a runnable vertical example that wires the real packages together
-- focused behavior tests around token, memory, pipeline, HTTP, Casbin, and example paths
+- focused behavior tests around token, memory, pipeline, HTTP, local roles, Casbin, and example paths
 
 The prototype intentionally did not include production storage, OIDC/JWT
 validation, provider-trust storage, router-specific adapters, admin HTTP APIs,
@@ -40,6 +41,9 @@ or a high-level composition builder.
   migrations, or internal setup code.
 - Do not build a second policy language above Casbin. The library should feed
   stable subjects, actions, and resources into application-owned policy.
+- Keep action strings as the current permission vocabulary until a real cleanup
+  is worthwhile. A future API pass may add a named action/permission type, but
+  local roles should not force that refactor.
 - Keep docs and design notes practical. Update them when implementation changes
   the shape, but do not let documentation work become a waterfall design pass.
 
@@ -199,4 +203,6 @@ from that integration.
 - SQLite storage
 - Advanced Casbin examples or policy models
 - A custom policy language or relationship graph
+- Auto-provisioning rules that assign roles from external identity metadata
+- A named action or permission type replacing raw action strings
 - v1 API stability before at least one real service integration

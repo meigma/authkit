@@ -66,6 +66,144 @@ func (s *Store) CreatePrincipal(
 	return createPrincipal(ctx, s.pool, req)
 }
 
+// CreateRole creates a local role in PostgreSQL.
+func (s *Store) CreateRole(ctx context.Context, req authkit.CreateRoleRequest) (authkit.Role, error) {
+	if err := ctx.Err(); err != nil {
+		return authkit.Role{}, err
+	}
+	if req.ID == "" {
+		return authkit.Role{}, errors.New("postgres: role ID is required")
+	}
+
+	role := authkit.Role(req)
+	if _, err := s.pool.Exec(
+		ctx,
+		`insert into authkit_roles (id, display_name, description)
+		values ($1, $2, $3)`,
+		role.ID,
+		role.DisplayName,
+		role.Description,
+	); err != nil {
+		if isPostgresCode(err, uniqueViolation) {
+			return authkit.Role{}, fmt.Errorf("postgres: role %q already exists", req.ID)
+		}
+
+		return authkit.Role{}, fmt.Errorf("postgres: create role: %w", err)
+	}
+
+	return role, nil
+}
+
+// GrantRoleAction grants an action to a local role.
+func (s *Store) GrantRoleAction(ctx context.Context, req authkit.GrantRoleActionRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if req.RoleID == "" {
+		return errors.New("postgres: role ID is required")
+	}
+	if req.Action == "" {
+		return errors.New("postgres: action is required")
+	}
+
+	if _, err := s.pool.Exec(
+		ctx,
+		`insert into authkit_role_actions (role_id, action)
+		values ($1, $2)
+		on conflict (role_id, action) do nothing`,
+		req.RoleID,
+		req.Action,
+	); err != nil {
+		if isPostgresCode(err, foreignKeyViolation) {
+			return fmt.Errorf("postgres: role %q does not exist", req.RoleID)
+		}
+
+		return fmt.Errorf("postgres: grant role action: %w", err)
+	}
+
+	return nil
+}
+
+// AssignPrincipalRole assigns a principal to a local role.
+func (s *Store) AssignPrincipalRole(ctx context.Context, req authkit.AssignPrincipalRoleRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if req.PrincipalID == "" {
+		return errors.New("postgres: principal ID is required")
+	}
+	if req.RoleID == "" {
+		return errors.New("postgres: role ID is required")
+	}
+
+	if _, err := s.pool.Exec(
+		ctx,
+		`insert into authkit_principal_roles (principal_id, role_id)
+		values ($1, $2)
+		on conflict (principal_id, role_id) do nothing`,
+		req.PrincipalID,
+		req.RoleID,
+	); err != nil {
+		if isPostgresCode(err, foreignKeyViolation) {
+			return fmt.Errorf(
+				"postgres: principal %q or role %q does not exist",
+				req.PrincipalID,
+				req.RoleID,
+			)
+		}
+
+		return fmt.Errorf("postgres: assign principal role: %w", err)
+	}
+
+	return nil
+}
+
+// ResolvePrincipalActions returns the distinct actions granted to principalID through roles.
+func (s *Store) ResolvePrincipalActions(ctx context.Context, principalID string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if principalID == "" {
+		return nil, errors.New("postgres: principal ID is required")
+	}
+
+	exists, err := s.principalExists(ctx, principalID)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, fmt.Errorf("postgres: principal %q does not exist", principalID)
+	}
+
+	rows, err := s.pool.Query(
+		ctx,
+		`select distinct ra.action
+		from authkit_principal_roles as pr
+		join authkit_role_actions as ra on ra.role_id = pr.role_id
+		where pr.principal_id = $1
+		order by ra.action`,
+		principalID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: resolve principal actions: %w", err)
+	}
+	defer rows.Close()
+
+	var actions []string
+	for rows.Next() {
+		var action string
+		if err := rows.Scan(&action); err != nil {
+			return nil, fmt.Errorf("postgres: scan principal action: %w", err)
+		}
+		actions = append(actions, action)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: read principal actions: %w", err)
+	}
+
+	return actions, nil
+}
+
 func createPrincipal(
 	ctx context.Context,
 	exec sqlExecutor,
@@ -486,6 +624,19 @@ func (s *Store) findIdentityLink(
 	}
 
 	return link, nil
+}
+
+func (s *Store) principalExists(ctx context.Context, principalID string) (bool, error) {
+	var exists bool
+	if err := s.pool.QueryRow(
+		ctx,
+		`select exists(select 1 from authkit_principals where id = $1)`,
+		principalID,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("postgres: find principal: %w", err)
+	}
+
+	return exists, nil
 }
 
 func findProvisionedIdentity(

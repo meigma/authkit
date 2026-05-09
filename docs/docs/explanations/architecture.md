@@ -25,6 +25,17 @@ containing the principal, action, resource, and caller-supplied facts is allowed
 The invariant is credential independence: permissions attach to the internal
 principal, not to a token, JWT, email address, or provider-specific user record.
 
+## Local Roles
+
+Local roles are admin-managed authorization state. Applications define the
+action vocabulary they enforce at handlers, such as `note:read`, while
+administrators create roles, grant actions to roles, and assign principals to
+roles through application-owned setup paths.
+
+`roleauth` authorizes by resolving the principal's effective action set and
+checking whether it contains the requested action. It does not derive
+permissions from external identity metadata, provider groups, or token claims.
+
 ## Authorization Facts
 
 `authkit.Facts` is a generic decision-time context bag. Applications supply
@@ -50,6 +61,7 @@ Adapters sit at the edges:
 - `provisioning` can create principals for caller-approved unresolved identities.
 - `httpauth` adapts a pipeline to `net/http`.
 - `httpfacts` provides optional helpers for deriving facts from HTTP requests.
+- `roleauth` authorizes from local role-derived effective actions.
 - `casbin` adapts Casbin enforcement to the `authkit.Authorizer` port.
 - `store/memory` and `store/postgres` implement storage contracts.
 - `compose` wires common HTTP setups without replacing the lower-level ports.
@@ -84,10 +96,10 @@ first tries normal identity resolution. If the identity is unresolved, it calls
 application-owned policy code to decide whether that verified identity may
 create a principal.
 
-Provisioning creates and links a principal only. It does not grant Casbin policy
-or derive authorization from JWT claims. Applications must explicitly forward
-the claims they need for display or attributes, and they remain responsible for
-permission grants.
+Provisioning creates and links a principal only. It does not grant local roles,
+grant Casbin policy, or derive authorization from JWT claims. Applications must
+explicitly forward the claims they need for display or attributes, and they
+remain responsible for permission grants.
 
 ## HTTP Runtime
 

@@ -23,6 +23,15 @@ type Options struct {
 	// PrincipalCreator creates internal principals.
 	PrincipalCreator authkit.PrincipalCreator
 
+	// RoleCreator creates local roles.
+	RoleCreator authkit.RoleCreator
+
+	// RoleActionGranter grants authorization actions to roles.
+	RoleActionGranter authkit.RoleActionGranter
+
+	// PrincipalRoleAssigner assigns principals to roles.
+	PrincipalRoleAssigner authkit.PrincipalRoleAssigner
+
 	// IdentityLinker links external identities to internal principals.
 	IdentityLinker authkit.IdentityLinker
 
@@ -32,9 +41,12 @@ type Options struct {
 
 // Service composes common authkit management operations.
 type Service struct {
-	principalCreator authkit.PrincipalCreator
-	identityLinker   authkit.IdentityLinker
-	apiTokens        APITokens
+	principalCreator      authkit.PrincipalCreator
+	roleCreator           authkit.RoleCreator
+	roleActionGranter     authkit.RoleActionGranter
+	principalRoleAssigner authkit.PrincipalRoleAssigner
+	identityLinker        authkit.IdentityLinker
+	apiTokens             APITokens
 }
 
 // NewService constructs a management service from opts.
@@ -50,9 +62,12 @@ func NewService(opts Options) (*Service, error) {
 	}
 
 	return &Service{
-		principalCreator: opts.PrincipalCreator,
-		identityLinker:   opts.IdentityLinker,
-		apiTokens:        opts.APITokens,
+		principalCreator:      opts.PrincipalCreator,
+		roleCreator:           opts.RoleCreator,
+		roleActionGranter:     opts.RoleActionGranter,
+		principalRoleAssigner: opts.PrincipalRoleAssigner,
+		identityLinker:        opts.IdentityLinker,
+		apiTokens:             opts.APITokens,
 	}, nil
 }
 
@@ -67,6 +82,49 @@ func (s *Service) CreatePrincipal(
 	}
 
 	return principal, nil
+}
+
+// CreateRole creates a local role.
+func (s *Service) CreateRole(
+	ctx context.Context,
+	req authkit.CreateRoleRequest,
+) (authkit.Role, error) {
+	if s.roleCreator == nil {
+		return authkit.Role{}, errors.New("management: role creator is required")
+	}
+
+	role, err := s.roleCreator.CreateRole(ctx, req)
+	if err != nil {
+		return authkit.Role{}, fmt.Errorf("management: create role: %w", err)
+	}
+
+	return role, nil
+}
+
+// GrantRoleAction grants an authorization action to a local role.
+func (s *Service) GrantRoleAction(ctx context.Context, req authkit.GrantRoleActionRequest) error {
+	if s.roleActionGranter == nil {
+		return errors.New("management: role action granter is required")
+	}
+
+	if err := s.roleActionGranter.GrantRoleAction(ctx, req); err != nil {
+		return fmt.Errorf("management: grant role action: %w", err)
+	}
+
+	return nil
+}
+
+// AssignPrincipalRole assigns a principal to a local role.
+func (s *Service) AssignPrincipalRole(ctx context.Context, req authkit.AssignPrincipalRoleRequest) error {
+	if s.principalRoleAssigner == nil {
+		return errors.New("management: principal role assigner is required")
+	}
+
+	if err := s.principalRoleAssigner.AssignPrincipalRole(ctx, req); err != nil {
+		return fmt.Errorf("management: assign principal role: %w", err)
+	}
+
+	return nil
 }
 
 // LinkIdentity links an external identity to an internal principal.

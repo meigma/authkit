@@ -14,6 +14,10 @@ import (
 
 func TestStoreSatisfiesAuthkitContracts(_ *testing.T) {
 	var _ authkit.PrincipalCreator = (*Store)(nil)
+	var _ authkit.RoleCreator = (*Store)(nil)
+	var _ authkit.RoleActionGranter = (*Store)(nil)
+	var _ authkit.PrincipalRoleAssigner = (*Store)(nil)
+	var _ authkit.PrincipalActionResolver = (*Store)(nil)
 	var _ authkit.IdentityLinker = (*Store)(nil)
 	var _ authkit.IdentityProvisioner = (*Store)(nil)
 	var _ authkit.PrincipalResolver = (*Store)(nil)

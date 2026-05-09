@@ -3,7 +3,7 @@
 authkit is a Go library for authentication and authorization in Web API services.
 It provides reusable request authentication, principal resolution, and authorization plumbing without becoming an identity provider, hosted login system, or policy framework.
 
-The shared auth path works end to end: an API token or OIDC-issued JWT bearer token authenticates to an external identity, the identity resolves to an internal principal, and Casbin authorizes that principal against an application resource and optional caller-supplied facts.
+The shared auth path works end to end: an API token or OIDC-issued JWT bearer token authenticates to an external identity, the identity resolves to an internal principal, and an authorizer checks that principal against an action, application resource, and optional caller-supplied facts.
 
 ## Status
 
@@ -14,14 +14,15 @@ Included now:
 - core `authkit` identity, principal, resource, decision, authorization fact, and port contracts
 - an explicit `Identity -> Principal -> Authorizer` pipeline
 - opaque API-token issuing, verification, revocation, expiration, and last-used tracking
-- memory-backed principal, identity-link, API-token, and OIDC provider-trust storage
-- Postgres-backed principal, identity-link, API-token, and OIDC provider-trust storage
-- Go-level management service for principal, identity-link, and API-token setup flows
+- memory-backed principal, role, identity-link, API-token, and OIDC provider-trust storage
+- Postgres-backed principal, role, identity-link, API-token, and OIDC provider-trust storage
+- Go-level management service for principal, role, identity-link, and API-token setup flows
 - OIDC-issued JWT bearer-token authentication from static, memory, Postgres, or app-owned trusted-provider sources
 - opt-in principal auto-provisioning for caller-approved external identities
 - `net/http` middleware with context helpers and authorization wrappers
 - optional `httpfacts` helpers for deriving decision-time facts from HTTP requests
 - thin HTTP composition helpers for common authenticator, pipeline, and middleware wiring
+- local role authorization through effective action grants
 - a thin Casbin authorizer adapter with replaceable request projection
 - `examples/notes`, a runnable vertical example that wires the real packages together
 

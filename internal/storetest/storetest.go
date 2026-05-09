@@ -17,7 +17,9 @@ import (
 
 const (
 	concurrentProvisionAttempts = 8
+	testAction                  = "notes:read"
 	testProvider                = "oidc"
+	testRoleID                  = "notes-reader"
 	testSubject                 = "user-123"
 	testDisplayName             = "Ada Lovelace"
 )
@@ -25,6 +27,10 @@ const (
 // Store is the complete storage surface exercised by Run.
 type Store interface {
 	authkit.PrincipalCreator
+	authkit.RoleCreator
+	authkit.RoleActionGranter
+	authkit.PrincipalRoleAssigner
+	authkit.PrincipalActionResolver
 	authkit.IdentityLinker
 	authkit.IdentityProvisioner
 	authkit.PrincipalResolver
@@ -76,6 +82,197 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 
 		require.Error(t, err)
 		assert.Empty(t, principal)
+	})
+
+	t.Run("create role", func(t *testing.T) {
+		store := newStore(t)
+		req := roleRequest()
+
+		role, err := store.CreateRole(context.Background(), req)
+
+		require.NoError(t, err)
+		assert.Equal(t, authkit.Role(req), role)
+	})
+
+	t.Run("create role validates request", func(t *testing.T) {
+		store := newStore(t)
+
+		role, err := store.CreateRole(context.Background(), authkit.CreateRoleRequest{})
+
+		require.Error(t, err)
+		assert.Empty(t, role)
+	})
+
+	t.Run("create role rejects duplicate ID", func(t *testing.T) {
+		store := newStore(t)
+		_, err := store.CreateRole(context.Background(), roleRequest())
+		require.NoError(t, err)
+
+		role, err := store.CreateRole(context.Background(), roleRequest())
+
+		require.Error(t, err)
+		assert.Empty(t, role)
+	})
+
+	t.Run("grant role action is idempotent", func(t *testing.T) {
+		store := newStore(t)
+		principal := createPrincipal(t, store)
+		createRole(t, store, testRoleID)
+
+		req := authkit.GrantRoleActionRequest{
+			RoleID: testRoleID,
+			Action: testAction,
+		}
+		require.NoError(t, store.GrantRoleAction(context.Background(), req))
+		require.NoError(t, store.GrantRoleAction(context.Background(), req))
+		require.NoError(t, store.AssignPrincipalRole(context.Background(), authkit.AssignPrincipalRoleRequest{
+			PrincipalID: principal.ID,
+			RoleID:      testRoleID,
+		}))
+
+		actions, err := store.ResolvePrincipalActions(context.Background(), principal.ID)
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{testAction}, actions)
+	})
+
+	t.Run("grant role action validates request", func(t *testing.T) {
+		store := newStore(t)
+		createRole(t, store, testRoleID)
+
+		tests := []struct {
+			name string
+			req  authkit.GrantRoleActionRequest
+		}{
+			{
+				name: "missing role ID",
+				req: authkit.GrantRoleActionRequest{
+					Action: testAction,
+				},
+			},
+			{
+				name: "missing action",
+				req: authkit.GrantRoleActionRequest{
+					RoleID: testRoleID,
+				},
+			},
+			{
+				name: "missing role",
+				req: authkit.GrantRoleActionRequest{
+					RoleID: "missing",
+					Action: testAction,
+				},
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				require.Error(t, store.GrantRoleAction(context.Background(), tt.req))
+			})
+		}
+	})
+
+	t.Run("assign principal role is idempotent", func(t *testing.T) {
+		store := newStore(t)
+		principal := createPrincipal(t, store)
+		createRole(t, store, testRoleID)
+		require.NoError(t, store.GrantRoleAction(context.Background(), authkit.GrantRoleActionRequest{
+			RoleID: testRoleID,
+			Action: testAction,
+		}))
+
+		req := authkit.AssignPrincipalRoleRequest{
+			PrincipalID: principal.ID,
+			RoleID:      testRoleID,
+		}
+		require.NoError(t, store.AssignPrincipalRole(context.Background(), req))
+		require.NoError(t, store.AssignPrincipalRole(context.Background(), req))
+
+		actions, err := store.ResolvePrincipalActions(context.Background(), principal.ID)
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{testAction}, actions)
+	})
+
+	t.Run("assign principal role validates request", func(t *testing.T) {
+		store := newStore(t)
+		principal := createPrincipal(t, store)
+		createRole(t, store, testRoleID)
+
+		tests := []struct {
+			name string
+			req  authkit.AssignPrincipalRoleRequest
+		}{
+			{
+				name: "missing principal ID",
+				req: authkit.AssignPrincipalRoleRequest{
+					RoleID: testRoleID,
+				},
+			},
+			{
+				name: "missing role ID",
+				req: authkit.AssignPrincipalRoleRequest{
+					PrincipalID: principal.ID,
+				},
+			},
+			{
+				name: "missing principal",
+				req: authkit.AssignPrincipalRoleRequest{
+					PrincipalID: "missing",
+					RoleID:      testRoleID,
+				},
+			},
+			{
+				name: "missing role",
+				req: authkit.AssignPrincipalRoleRequest{
+					PrincipalID: principal.ID,
+					RoleID:      "missing",
+				},
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				require.Error(t, store.AssignPrincipalRole(context.Background(), tt.req))
+			})
+		}
+	})
+
+	t.Run("resolve principal actions returns distinct sorted actions", func(t *testing.T) {
+		store := newStore(t)
+		principal := createPrincipal(t, store)
+		createRole(t, store, "writers")
+		createRole(t, store, "readers")
+		for _, grant := range []authkit.GrantRoleActionRequest{
+			{RoleID: "writers", Action: "notes:write"},
+			{RoleID: "writers", Action: testAction},
+			{RoleID: "readers", Action: testAction},
+		} {
+			require.NoError(t, store.GrantRoleAction(context.Background(), grant))
+		}
+		for _, assignment := range []authkit.AssignPrincipalRoleRequest{
+			{PrincipalID: principal.ID, RoleID: "writers"},
+			{PrincipalID: principal.ID, RoleID: "readers"},
+		} {
+			require.NoError(t, store.AssignPrincipalRole(context.Background(), assignment))
+		}
+
+		actions, err := store.ResolvePrincipalActions(context.Background(), principal.ID)
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{testAction, "notes:write"}, actions)
+	})
+
+	t.Run("resolve principal actions validates request", func(t *testing.T) {
+		store := newStore(t)
+
+		actions, err := store.ResolvePrincipalActions(context.Background(), "")
+		require.Error(t, err)
+		assert.Nil(t, actions)
+
+		actions, err = store.ResolvePrincipalActions(context.Background(), "missing")
+		require.Error(t, err)
+		assert.Nil(t, actions)
 	})
 
 	t.Run("principal attributes are copied", func(t *testing.T) {
@@ -719,6 +916,27 @@ func createPrincipal(t *testing.T, store Store) authkit.Principal {
 	require.NoError(t, err)
 
 	return principal
+}
+
+func createRole(t *testing.T, store Store, roleID string) authkit.Role {
+	t.Helper()
+
+	role, err := store.CreateRole(context.Background(), authkit.CreateRoleRequest{
+		ID:          roleID,
+		DisplayName: "Notes reader",
+		Description: "Can read notes.",
+	})
+	require.NoError(t, err)
+
+	return role
+}
+
+func roleRequest() authkit.CreateRoleRequest {
+	return authkit.CreateRoleRequest{
+		ID:          testRoleID,
+		DisplayName: "Notes reader",
+		Description: "Can read notes.",
+	}
 }
 
 func providerFixture() oidc.Provider {

@@ -14,6 +14,36 @@ type CreatePrincipalRequest struct {
 	Attributes map[string]any
 }
 
+// CreateRoleRequest describes a request to create an admin-managed local role.
+type CreateRoleRequest struct {
+	// ID is the stable application-owned role identifier.
+	ID string
+
+	// DisplayName is a human-readable role label.
+	DisplayName string
+
+	// Description optionally explains the role's intended use.
+	Description string
+}
+
+// GrantRoleActionRequest describes a request to grant an action to a role.
+type GrantRoleActionRequest struct {
+	// RoleID identifies the role receiving the action grant.
+	RoleID string
+
+	// Action is the authorization action granted to the role.
+	Action string
+}
+
+// AssignPrincipalRoleRequest describes a request to assign a principal to a role.
+type AssignPrincipalRoleRequest struct {
+	// PrincipalID identifies the principal receiving the role.
+	PrincipalID string
+
+	// RoleID identifies the assigned role.
+	RoleID string
+}
+
 // LinkIdentityRequest describes a request to link an external identity to a principal.
 type LinkIdentityRequest struct {
 	// Provider identifies the authority or credential class for the identity.
@@ -51,6 +81,30 @@ type ProvisionIdentityResult struct {
 type PrincipalCreator interface {
 	// CreatePrincipal creates a principal from req.
 	CreatePrincipal(ctx context.Context, req CreatePrincipalRequest) (Principal, error)
+}
+
+// RoleCreator creates admin-managed local roles.
+type RoleCreator interface {
+	// CreateRole creates a local role from req.
+	CreateRole(ctx context.Context, req CreateRoleRequest) (Role, error)
+}
+
+// RoleActionGranter grants authorization actions to roles.
+type RoleActionGranter interface {
+	// GrantRoleAction grants req.Action to req.RoleID.
+	GrantRoleAction(ctx context.Context, req GrantRoleActionRequest) error
+}
+
+// PrincipalRoleAssigner assigns principals to roles.
+type PrincipalRoleAssigner interface {
+	// AssignPrincipalRole assigns req.PrincipalID to req.RoleID.
+	AssignPrincipalRole(ctx context.Context, req AssignPrincipalRoleRequest) error
+}
+
+// PrincipalActionResolver resolves effective authorization actions for principals.
+type PrincipalActionResolver interface {
+	// ResolvePrincipalActions returns the distinct actions granted to principalID.
+	ResolvePrincipalActions(ctx context.Context, principalID string) ([]string, error)
 }
 
 // IdentityLinker links external identities to internal principals.
