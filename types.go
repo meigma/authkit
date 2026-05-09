@@ -49,7 +49,7 @@ type Resource struct {
 	// ID identifies one resource instance within Type.
 	ID string
 
-	// Attr contains optional resource metadata used by authorizers.
+	// Attr contains optional durable resource metadata used by authorizers.
 	Attr map[string]any
 }
 
@@ -60,6 +60,33 @@ type Decision struct {
 
 	// Reason optionally explains the decision for logs, debugging, or response rendering.
 	Reason string
+}
+
+// AuthorizationRequest describes a caller-supplied authorization request.
+type AuthorizationRequest struct {
+	// Action identifies the operation the caller wants to perform.
+	Action string
+
+	// Resource is the authorization target for Action.
+	Resource Resource
+
+	// Facts contains optional decision-time context supplied by the caller.
+	Facts Facts
+}
+
+// AuthorizationCheck describes the complete input passed to an Authorizer.
+type AuthorizationCheck struct {
+	// Principal is the resolved internal application actor.
+	Principal Principal
+
+	// Action identifies the operation Principal wants to perform.
+	Action string
+
+	// Resource is the authorization target for Action.
+	Resource Resource
+
+	// Facts contains optional decision-time context supplied by the caller.
+	Facts Facts
 }
 
 // ExternalIdentity links a provider-scoped identity to an internal principal.

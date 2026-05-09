@@ -324,21 +324,84 @@ func TestPipelineAuthenticatePassesThroughContextErrors(t *testing.T) {
 }
 
 func TestPipelineAuthorizeAllowsDecision(t *testing.T) {
+	facts := authkit.Facts{
+		"tenant_id": "tenant-1",
+	}
 	pipeline := newTestPipeline(t, authkit.PipelineOptions{
 		Authenticators: []authkit.Authenticator{allowAuthenticator()},
 		Resolver:       allowResolver(),
-		Authorizer:     allowAuthorizer(),
+		Authorizer: testAuthorizer{
+			can: func(_ context.Context, check authkit.AuthorizationCheck) (authkit.Decision, error) {
+				assert.Equal(t, authkit.AuthorizationCheck{
+					Principal: testPrincipal(),
+					Action:    "note:update",
+					Resource:  testResource(),
+					Facts:     facts,
+				}, check)
+
+				return authkit.Decision{Allowed: true, Reason: "allowed"}, nil
+			},
+		},
 	})
 
 	authorization, err := pipeline.Authorize(
 		context.Background(),
 		httptest.NewRequest(http.MethodPost, "/notes/note-1", nil),
-		"note:update",
-		testResource(),
+		authkit.AuthorizationRequest{
+			Action:   "note:update",
+			Resource: testResource(),
+			Facts:    facts,
+		},
 	)
 
 	require.NoError(t, err)
 	assert.Equal(t, testPrincipal(), authorization.Authentication.Principal)
+	assert.Equal(t, authkit.AuthorizationCheck{
+		Principal: testPrincipal(),
+		Action:    "note:update",
+		Resource:  testResource(),
+		Facts:     facts,
+	}, authorization.Check)
+	assert.Equal(t, authkit.Decision{Allowed: true, Reason: "allowed"}, authorization.Decision)
+}
+
+func TestPipelineAuthorizeAuthenticatedUsesExistingAuthentication(t *testing.T) {
+	facts := authkit.Facts{
+		"tenant_id": "tenant-1",
+	}
+	pipeline := newTestPipeline(t, authkit.PipelineOptions{
+		Authenticators: []authkit.Authenticator{denyAuthenticator("unused")},
+		Resolver:       allowResolver(),
+		Authorizer: testAuthorizer{
+			can: func(_ context.Context, check authkit.AuthorizationCheck) (authkit.Decision, error) {
+				assert.Equal(t, authkit.AuthorizationCheck{
+					Principal: testPrincipal(),
+					Action:    "note:update",
+					Resource:  testResource(),
+					Facts:     facts,
+				}, check)
+
+				return authkit.Decision{Allowed: true, Reason: "allowed"}, nil
+			},
+		},
+	})
+
+	authorization, err := pipeline.AuthorizeAuthenticated(
+		context.Background(),
+		authkit.Authentication{
+			AuthenticatorName: "pre-authenticated",
+			Identity:          testIdentity(),
+			Principal:         testPrincipal(),
+		},
+		authkit.AuthorizationRequest{
+			Action:   "note:update",
+			Resource: testResource(),
+			Facts:    facts,
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, "pre-authenticated", authorization.Authentication.AuthenticatorName)
 	assert.Equal(t, authkit.Decision{Allowed: true, Reason: "allowed"}, authorization.Decision)
 }
 
@@ -351,15 +414,10 @@ func TestPipelineAuthorizeReturnsUnauthorizedForDeniedDecision(t *testing.T) {
 		Authenticators: []authkit.Authenticator{allowAuthenticator()},
 		Resolver:       allowResolver(),
 		Authorizer: testAuthorizer{
-			can: func(
-				_ context.Context,
-				principal authkit.Principal,
-				action string,
-				resource authkit.Resource,
-			) (authkit.Decision, error) {
-				assert.Equal(t, testPrincipal(), principal)
-				assert.Equal(t, "note:update", action)
-				assert.Equal(t, testResource(), resource)
+			can: func(_ context.Context, check authkit.AuthorizationCheck) (authkit.Decision, error) {
+				assert.Equal(t, testPrincipal(), check.Principal)
+				assert.Equal(t, "note:update", check.Action)
+				assert.Equal(t, testResource(), check.Resource)
 
 				return denied, nil
 			},
@@ -369,8 +427,10 @@ func TestPipelineAuthorizeReturnsUnauthorizedForDeniedDecision(t *testing.T) {
 	authorization, err := pipeline.Authorize(
 		context.Background(),
 		httptest.NewRequest(http.MethodPost, "/notes/note-1", nil),
-		"note:update",
-		testResource(),
+		authkit.AuthorizationRequest{
+			Action:   "note:update",
+			Resource: testResource(),
+		},
 	)
 
 	require.ErrorIs(t, err, authkit.ErrUnauthorized)
@@ -384,7 +444,7 @@ func TestPipelineAuthorizeWrapsUnexpectedAuthorizerErrors(t *testing.T) {
 		Authenticators: []authkit.Authenticator{allowAuthenticator()},
 		Resolver:       allowResolver(),
 		Authorizer: testAuthorizer{
-			can: func(context.Context, authkit.Principal, string, authkit.Resource) (authkit.Decision, error) {
+			can: func(context.Context, authkit.AuthorizationCheck) (authkit.Decision, error) {
 				return authkit.Decision{}, authorizerErr
 			},
 		},
@@ -393,8 +453,10 @@ func TestPipelineAuthorizeWrapsUnexpectedAuthorizerErrors(t *testing.T) {
 	authorization, err := pipeline.Authorize(
 		context.Background(),
 		httptest.NewRequest(http.MethodPost, "/notes/note-1", nil),
-		"note:update",
-		testResource(),
+		authkit.AuthorizationRequest{
+			Action:   "note:update",
+			Resource: testResource(),
+		},
 	)
 
 	require.ErrorIs(t, err, authkit.ErrInternal)
@@ -407,7 +469,7 @@ func TestPipelineAuthorizePassesThroughContextErrors(t *testing.T) {
 		Authenticators: []authkit.Authenticator{allowAuthenticator()},
 		Resolver:       allowResolver(),
 		Authorizer: testAuthorizer{
-			can: func(context.Context, authkit.Principal, string, authkit.Resource) (authkit.Decision, error) {
+			can: func(context.Context, authkit.AuthorizationCheck) (authkit.Decision, error) {
 				return authkit.Decision{}, context.Canceled
 			},
 		},
@@ -416,8 +478,10 @@ func TestPipelineAuthorizePassesThroughContextErrors(t *testing.T) {
 	_, err := pipeline.Authorize(
 		context.Background(),
 		httptest.NewRequest(http.MethodPost, "/notes/note-1", nil),
-		"note:update",
-		testResource(),
+		authkit.AuthorizationRequest{
+			Action:   "note:update",
+			Resource: testResource(),
+		},
 	)
 
 	require.ErrorIs(t, err, context.Canceled)
@@ -497,16 +561,11 @@ func (r testResolver) ResolveIdentity(ctx context.Context, identity authkit.Iden
 }
 
 type testAuthorizer struct {
-	can func(context.Context, authkit.Principal, string, authkit.Resource) (authkit.Decision, error)
+	can func(context.Context, authkit.AuthorizationCheck) (authkit.Decision, error)
 }
 
-func (a testAuthorizer) Can(
-	ctx context.Context,
-	principal authkit.Principal,
-	action string,
-	resource authkit.Resource,
-) (authkit.Decision, error) {
-	return a.can(ctx, principal, action, resource)
+func (a testAuthorizer) Can(ctx context.Context, check authkit.AuthorizationCheck) (authkit.Decision, error) {
+	return a.can(ctx, check)
 }
 
 func allowAuthenticator() testAuthenticator {
@@ -541,7 +600,7 @@ func allowResolver() testResolver {
 
 func allowAuthorizer() testAuthorizer {
 	return testAuthorizer{
-		can: func(context.Context, authkit.Principal, string, authkit.Resource) (authkit.Decision, error) {
+		can: func(context.Context, authkit.AuthorizationCheck) (authkit.Decision, error) {
 			return authkit.Decision{Allowed: true, Reason: "allowed"}, nil
 		},
 	}

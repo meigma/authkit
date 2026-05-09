@@ -735,13 +735,13 @@ func newPipeline(
 
 type allowAuthorizer struct{}
 
-func (allowAuthorizer) Can(context.Context, authkit.Principal, string, authkit.Resource) (authkit.Decision, error) {
+func (allowAuthorizer) Can(context.Context, authkit.AuthorizationCheck) (authkit.Decision, error) {
 	return authkit.Decision{Allowed: true}, nil
 }
 
 type denyAuthorizer struct{}
 
-func (denyAuthorizer) Can(context.Context, authkit.Principal, string, authkit.Resource) (authkit.Decision, error) {
+func (denyAuthorizer) Can(context.Context, authkit.AuthorizationCheck) (authkit.Decision, error) {
 	return authkit.Decision{Allowed: false, Reason: "policy denied"}, nil
 }
 

@@ -16,7 +16,7 @@ type Enforcer interface {
 }
 
 // RequestBuilder projects authkit authorization inputs into Casbin request values.
-type RequestBuilder func(authkit.Principal, string, authkit.Resource) ([]any, error)
+type RequestBuilder func(authkit.AuthorizationCheck) ([]any, error)
 
 // Authorizer adapts a Casbin enforcer to authkit.Authorizer.
 type Authorizer struct {
@@ -46,18 +46,13 @@ func NewAuthorizer(enforcer Enforcer, opts ...Option) (*Authorizer, error) {
 	}, nil
 }
 
-// Can returns the Casbin decision for principal, action, and resource.
-func (a *Authorizer) Can(
-	ctx context.Context,
-	principal authkit.Principal,
-	action string,
-	resource authkit.Resource,
-) (authkit.Decision, error) {
+// Can returns the Casbin decision for check.
+func (a *Authorizer) Can(ctx context.Context, check authkit.AuthorizationCheck) (authkit.Decision, error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return authkit.Decision{}, ctxErr
 	}
 
-	request, err := a.requestBuilder(principal, action, resource)
+	request, err := a.requestBuilder(check)
 	if err != nil {
 		return authkit.Decision{}, err
 	}
@@ -79,23 +74,19 @@ func (a *Authorizer) Can(
 	return authkit.Decision{Allowed: true}, nil
 }
 
-// DefaultRequestBuilder projects to the classic Casbin sub, obj, act request.
-func DefaultRequestBuilder(
-	principal authkit.Principal,
-	action string,
-	resource authkit.Resource,
-) ([]any, error) {
-	if principal.ID == "" {
+// DefaultRequestBuilder projects check to the classic Casbin sub, obj, act request.
+func DefaultRequestBuilder(check authkit.AuthorizationCheck) ([]any, error) {
+	if check.Principal.ID == "" {
 		return nil, errors.New("casbin: principal ID is required")
 	}
-	if action == "" {
+	if check.Action == "" {
 		return nil, errors.New("casbin: action is required")
 	}
-	if resource.Type == "" {
+	if check.Resource.Type == "" {
 		return nil, errors.New("casbin: resource type is required")
 	}
 
-	return []any{principal.ID, resourceObject(resource), action}, nil
+	return []any{check.Principal.ID, resourceObject(check.Resource), check.Action}, nil
 }
 
 func resourceObject(resource authkit.Resource) string {

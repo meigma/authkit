@@ -14,6 +14,9 @@ type ErrorRenderer func(http.ResponseWriter, *http.Request, error)
 // ResourceExtractor extracts the authorization target from an HTTP request.
 type ResourceExtractor func(*http.Request) (authkit.Resource, error)
 
+// AuthorizationExtractor extracts an authorization request from an authenticated HTTP request.
+type AuthorizationExtractor func(*http.Request) (authkit.AuthorizationRequest, error)
+
 // Middleware adapts an authkit Pipeline to net/http handlers.
 type Middleware struct {
 	pipeline *authkit.Pipeline
@@ -61,8 +64,11 @@ func (m *Middleware) Require(
 	action string,
 	resource authkit.Resource,
 ) func(http.Handler) http.Handler {
-	return m.RequireFunc(action, func(*http.Request) (authkit.Resource, error) {
-		return resource, nil
+	return m.RequireAuthorization(func(*http.Request) (authkit.AuthorizationRequest, error) {
+		return authkit.AuthorizationRequest{
+			Action:   action,
+			Resource: resource,
+		}, nil
 	})
 }
 
@@ -71,30 +77,71 @@ func (m *Middleware) RequireFunc(
 	action string,
 	extract ResourceExtractor,
 ) func(http.Handler) http.Handler {
+	return m.RequireAuthorization(func(req *http.Request) (authkit.AuthorizationRequest, error) {
+		if extract == nil {
+			return authkit.AuthorizationRequest{}, errors.New("resource extractor is required")
+		}
+
+		resource, err := extract(req)
+		if err != nil {
+			return authkit.AuthorizationRequest{}, fmt.Errorf("extract resource: %w", err)
+		}
+
+		return authkit.AuthorizationRequest{
+			Action:   action,
+			Resource: resource,
+		}, nil
+	})
+}
+
+// RequireAuthorization authenticates, extracts, and evaluates an authorization request.
+func (m *Middleware) RequireAuthorization(
+	extract AuthorizationExtractor,
+) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if extract == nil {
-				m.renderer(w, req, fmt.Errorf("%w: resource extractor is required", authkit.ErrInternal))
-
-				return
-			}
-
-			resource, err := extract(req)
-			if err != nil {
-				m.renderer(w, req, fmt.Errorf("%w: extract resource: %w", authkit.ErrInternal, err))
-
-				return
-			}
-
-			authorization, err := m.pipeline.Authorize(req.Context(), req, action, resource)
+			authentication, err := m.pipeline.Authenticate(req.Context(), req)
 			if err != nil {
 				m.renderer(w, req, err)
 
 				return
 			}
 
-			ctx := contextWithAuthentication(req.Context(), authorization.Authentication)
-			next.ServeHTTP(w, req.WithContext(ctx))
+			authenticatedReq := req.WithContext(contextWithAuthentication(req.Context(), authentication))
+			if extract == nil {
+				m.renderer(
+					w,
+					authenticatedReq,
+					fmt.Errorf("%w: authorization extractor is required", authkit.ErrInternal),
+				)
+
+				return
+			}
+
+			authorizationRequest, err := extract(authenticatedReq)
+			if err != nil {
+				m.renderer(
+					w,
+					authenticatedReq,
+					fmt.Errorf("%w: extract authorization: %w", authkit.ErrInternal, err),
+				)
+
+				return
+			}
+
+			authorization, err := m.pipeline.AuthorizeAuthenticated(
+				authenticatedReq.Context(),
+				authentication,
+				authorizationRequest,
+			)
+			if err != nil {
+				m.renderer(w, authenticatedReq, err)
+
+				return
+			}
+
+			ctx := contextWithAuthentication(authenticatedReq.Context(), authorization.Authentication)
+			next.ServeHTTP(w, authenticatedReq.WithContext(ctx))
 		})
 	}
 }

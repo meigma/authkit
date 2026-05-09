@@ -84,10 +84,17 @@ if err != nil {
 ```go
 mux.Handle(
 	"GET /notes/{noteID}",
-	kit.Middleware.RequireFunc("note:read", func(req *http.Request) (authkit.Resource, error) {
-		return authkit.Resource{
-			Type: "note",
-			ID:   req.PathValue("noteID"),
+	kit.Middleware.RequireAuthorization(func(req *http.Request) (authkit.AuthorizationRequest, error) {
+		return authkit.AuthorizationRequest{
+			Action: "note:read",
+			Resource: authkit.Resource{
+				Type: "note",
+				ID:   req.PathValue("noteID"),
+			},
+			Facts: authkit.MergeFacts(
+				httpfacts.Method(req),
+				httpfacts.Header(req, "X-Tenant-Id"),
+			),
 		}, nil
 	})(notesHandler),
 )

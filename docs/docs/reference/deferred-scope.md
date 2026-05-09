@@ -13,7 +13,7 @@ that integration before committing to a compatibility promise.
 
 authkit currently supports:
 
-- core identity, principal, resource, decision, and port contracts
+- core identity, principal, resource, decision, authorization fact, and port contracts
 - explicit `Identity -> Principal -> Authorizer` request pipeline
 - opaque API-token issuing, verification, revocation, expiration, and last-used tracking
 - memory and Postgres storage for principals, identity links, API tokens, and OIDC provider trust
@@ -21,6 +21,7 @@ authkit currently supports:
 - OIDC-issued JWT bearer-token authentication
 - opt-in principal auto-provisioning for caller-approved external identities
 - `net/http` middleware and context helpers
+- optional HTTP fact helpers
 - thin HTTP composition helpers
 - Casbin authorization adapter
 - runnable notes example and tests
@@ -36,6 +37,7 @@ The following items are intentionally out of scope:
 - router/framework-specific adapters
 - SQLite storage
 - advanced Casbin examples or policy models
+- built-in principal enrichment from OIDC/JWT claims or external groups
 - custom policy language or relationship graph
 - a compatibility promise before at least one real service integration
 

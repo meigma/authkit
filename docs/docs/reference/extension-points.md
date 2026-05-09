@@ -44,8 +44,9 @@ Provided adapters:
 
 ### `authkit.Authorizer`
 
-Decides whether a principal can perform an action on a resource. Implement this
-for a policy engine other than Casbin.
+Decides whether an `authkit.AuthorizationCheck` is allowed. The check contains
+the resolved principal, action, resource, and caller-supplied decision facts.
+Implement this for a policy engine other than Casbin.
 
 Provided adapter:
 
@@ -98,15 +99,24 @@ Provided sources:
 when an API needs JSON errors, custom status bodies, or structured error
 responses.
 
-`httpauth.ResourceExtractor` lets a route map request state to an
-`authkit.Resource` before authorization.
+`httpauth.AuthorizationExtractor` lets a route map request state to an
+`authkit.AuthorizationRequest` before authorization. Use it when a route needs
+to supply decision-time facts. The extractor receives a request whose context
+already contains the resolved `authkit.Authentication`.
+
+`httpauth.ResourceExtractor` remains available for routes that only need to map
+request state to an `authkit.Resource`.
+
+The `httpfacts` package provides optional helpers for deriving method, host,
+path, remote address, selected header, and path-value facts from HTTP requests.
+These helpers do not inject facts automatically.
 
 ## Casbin Adapter
 
 `casbin.WithRequestBuilder` replaces the default projection from
-`Principal + action + Resource` to Casbin request values. Use it when an
-application model expects a different subject, object, action, or attribute
-shape.
+`authkit.AuthorizationCheck` to Casbin request values. Use it when an
+application model expects facts, a different subject, object, action, or
+attribute shape.
 
 ## Composition Helper
 

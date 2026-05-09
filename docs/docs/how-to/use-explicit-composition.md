@@ -46,7 +46,8 @@ if err != nil {
 ```
 
 The resolver maps external identities to internal principals. The authorizer
-receives the resolved principal, action, and resource.
+receives an authorization check containing the resolved principal, action,
+resource, and optional facts.
 
 ## Build HTTP Middleware
 
@@ -61,7 +62,8 @@ if err != nil {
 ```
 
 Use `Authenticate` when a route only needs a resolved principal. Use `Require`
-or `RequireFunc` when a route also needs an authorization decision.
+or `RequireFunc` when a route only needs an action and resource. Use
+`RequireAuthorization` when a route also needs to supply decision-time facts.
 
 ```go
 mux.Handle("GET /me", middleware.Authenticate(meHandler))
@@ -69,6 +71,11 @@ mux.Handle("GET /me", middleware.Authenticate(meHandler))
 mux.Handle(
 	"GET /notes/{noteID}",
 	middleware.RequireFunc("note:read", extractNoteResource)(notesHandler),
+)
+
+mux.Handle(
+	"POST /deployments/{deploymentID}",
+	middleware.RequireAuthorization(extractDeploymentAuthorization)(deployHandler),
 )
 ```
 
