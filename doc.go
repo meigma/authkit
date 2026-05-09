@@ -6,5 +6,6 @@
 // those identities to internal Principal values, and an Authorizer evaluates
 // actions against application Resource values. The apikey and oidc packages are
 // concrete authenticators for opaque API tokens and OIDC-issued JWT bearer
-// tokens.
+// tokens. The provisioning package can wrap a resolver to create principals for
+// caller-approved identities.
 package authkit

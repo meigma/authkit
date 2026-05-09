@@ -15,6 +15,7 @@ import (
 func TestStoreSatisfiesAuthkitContracts(_ *testing.T) {
 	var _ authkit.PrincipalCreator = (*Store)(nil)
 	var _ authkit.IdentityLinker = (*Store)(nil)
+	var _ authkit.IdentityProvisioner = (*Store)(nil)
 	var _ authkit.PrincipalResolver = (*Store)(nil)
 	var _ apikey.TokenStore = (*Store)(nil)
 	var _ oidc.ProviderSource = (*Store)(nil)

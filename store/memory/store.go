@@ -152,6 +152,74 @@ func (s *Store) ResolveIdentity(ctx context.Context, identity authkit.Identity) 
 	return &resolved, nil
 }
 
+// ProvisionIdentity creates and links a principal for identity or returns the existing link.
+func (s *Store) ProvisionIdentity(
+	ctx context.Context,
+	req authkit.ProvisionIdentityRequest,
+) (authkit.ProvisionIdentityResult, error) {
+	if err := ctx.Err(); err != nil {
+		return authkit.ProvisionIdentityResult{}, err
+	}
+	if req.Identity.Provider == "" || req.Identity.Subject == "" {
+		return authkit.ProvisionIdentityResult{}, fmt.Errorf(
+			"%w: provider and subject are required",
+			authkit.ErrUnresolvedIdentity,
+		)
+	}
+	if req.Principal.Kind != authkit.PrincipalKindUser && req.Principal.Kind != authkit.PrincipalKindService {
+		return authkit.ProvisionIdentityResult{}, fmt.Errorf(
+			"memory: unsupported principal kind %q",
+			req.Principal.Kind,
+		)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key := identityKey{
+		provider: req.Identity.Provider,
+		subject:  req.Identity.Subject,
+	}
+	if link, ok := s.links[key]; ok {
+		principal, ok := s.principals[link.PrincipalID]
+		if !ok {
+			return authkit.ProvisionIdentityResult{}, fmt.Errorf(
+				"%w: linked principal %q does not exist",
+				authkit.ErrUnresolvedIdentity,
+				link.PrincipalID,
+			)
+		}
+
+		return authkit.ProvisionIdentityResult{
+			Principal: clonePrincipal(principal),
+			Link:      link,
+			Created:   false,
+		}, nil
+	}
+
+	principal := authkit.Principal{
+		ID:          principalIDPrefix + strconv.Itoa(s.nextPrincipalNumber),
+		Kind:        req.Principal.Kind,
+		DisplayName: req.Principal.DisplayName,
+		Attributes:  cloneAttributes(req.Principal.Attributes),
+	}
+	s.nextPrincipalNumber++
+	s.principals[principal.ID] = principal
+
+	link := authkit.ExternalIdentity{
+		Provider:    req.Identity.Provider,
+		Subject:     req.Identity.Subject,
+		PrincipalID: principal.ID,
+	}
+	s.links[key] = link
+
+	return authkit.ProvisionIdentityResult{
+		Principal: clonePrincipal(principal),
+		Link:      link,
+		Created:   true,
+	}, nil
+}
+
 // TrustProvider stores provider as trusted for its issuer.
 func (s *Store) TrustProvider(ctx context.Context, provider oidc.Provider) (oidc.Provider, error) {
 	if err := ctx.Err(); err != nil {

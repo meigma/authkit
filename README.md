@@ -18,6 +18,7 @@ Included now:
 - Postgres-backed principal, identity-link, API-token, and OIDC provider-trust storage
 - Go-level management service for principal, identity-link, and API-token setup flows
 - OIDC-issued JWT bearer-token authentication from static, memory, Postgres, or app-owned trusted-provider sources
+- opt-in principal auto-provisioning for caller-approved external identities
 - `net/http` middleware with context helpers and authorization wrappers
 - thin HTTP composition helpers for common authenticator, pipeline, and middleware wiring
 - a thin Casbin authorizer adapter with replaceable request projection

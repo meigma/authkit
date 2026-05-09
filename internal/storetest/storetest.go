@@ -3,6 +3,7 @@ package storetest
 import (
 	"context"
 	"crypto/sha256"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,15 +16,17 @@ import (
 )
 
 const (
-	testProvider    = "oidc"
-	testSubject     = "user-123"
-	testDisplayName = "Ada Lovelace"
+	concurrentProvisionAttempts = 8
+	testProvider                = "oidc"
+	testSubject                 = "user-123"
+	testDisplayName             = "Ada Lovelace"
 )
 
 // Store is the complete storage surface exercised by Run.
 type Store interface {
 	authkit.PrincipalCreator
 	authkit.IdentityLinker
+	authkit.IdentityProvisioner
 	authkit.PrincipalResolver
 	apikey.TokenStore
 	oidc.ProviderTrustStore
@@ -31,7 +34,7 @@ type Store interface {
 
 // Run runs the shared storage behavior suite against newStore.
 //
-//nolint:funlen // Keeping one top-level suite makes cross-store coverage easy to audit.
+//nolint:funlen,gocognit // Keeping one top-level suite makes cross-store coverage easy to audit.
 func Run(t *testing.T, newStore func(t *testing.T) Store) {
 	t.Helper()
 
@@ -262,6 +265,167 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 		}
 	})
 
+	t.Run("provision identity creates principal and link", func(t *testing.T) {
+		store := newStore(t)
+		req := provisionRequest()
+		wantAttributes := map[string]any{
+			"email": "ada@example.test",
+		}
+
+		result, err := store.ProvisionIdentity(context.Background(), req)
+		require.NoError(t, err)
+		assert.True(t, result.Created)
+		assert.NotEmpty(t, result.Principal.ID)
+		assert.Equal(t, authkit.PrincipalKindUser, result.Principal.Kind)
+		assert.Equal(t, testDisplayName, result.Principal.DisplayName)
+		assert.Equal(t, wantAttributes, result.Principal.Attributes)
+		assert.Equal(t, authkit.ExternalIdentity{
+			Provider:    testProvider,
+			Subject:     testSubject,
+			PrincipalID: result.Principal.ID,
+		}, result.Link)
+
+		req.Principal.Attributes["email"] = "changed before resolve"
+		result.Principal.Attributes["email"] = "changed from returned principal"
+
+		resolved, err := store.ResolveIdentity(context.Background(), req.Identity)
+		require.NoError(t, err)
+		require.NotNil(t, resolved)
+		assert.Equal(t, wantAttributes, resolved.Attributes)
+		assert.Equal(t, result.Principal.ID, resolved.ID)
+	})
+
+	t.Run("provision identity returns existing link without updating principal", func(t *testing.T) {
+		store := newStore(t)
+		first, err := store.ProvisionIdentity(context.Background(), provisionRequest())
+		require.NoError(t, err)
+		require.True(t, first.Created)
+
+		secondReq := provisionRequest()
+		secondReq.Principal.DisplayName = "Changed Name"
+		secondReq.Principal.Attributes = map[string]any{
+			"email": "changed@example.test",
+		}
+		second, err := store.ProvisionIdentity(context.Background(), secondReq)
+
+		require.NoError(t, err)
+		assert.False(t, second.Created)
+		assert.Equal(t, first.Link, second.Link)
+		assert.Equal(t, first.Principal, second.Principal)
+		assert.Equal(t, testDisplayName, second.Principal.DisplayName)
+		assert.Equal(t, "ada@example.test", second.Principal.Attributes["email"])
+	})
+
+	t.Run("provision identity validates request", func(t *testing.T) {
+		store := newStore(t)
+
+		tests := []struct {
+			name      string
+			req       authkit.ProvisionIdentityRequest
+			assertErr func(t *testing.T, err error)
+		}{
+			{
+				name: "missing provider",
+				req: authkit.ProvisionIdentityRequest{
+					Identity: authkit.Identity{Subject: testSubject},
+					Principal: authkit.CreatePrincipalRequest{
+						Kind: authkit.PrincipalKindUser,
+					},
+				},
+				assertErr: func(t *testing.T, err error) {
+					require.ErrorIs(t, err, authkit.ErrUnresolvedIdentity)
+				},
+			},
+			{
+				name: "missing subject",
+				req: authkit.ProvisionIdentityRequest{
+					Identity: authkit.Identity{Provider: testProvider},
+					Principal: authkit.CreatePrincipalRequest{
+						Kind: authkit.PrincipalKindUser,
+					},
+				},
+				assertErr: func(t *testing.T, err error) {
+					require.ErrorIs(t, err, authkit.ErrUnresolvedIdentity)
+				},
+			},
+			{
+				name: "invalid principal kind",
+				req: authkit.ProvisionIdentityRequest{
+					Identity: authkit.Identity{
+						Provider: testProvider,
+						Subject:  testSubject,
+					},
+					Principal: authkit.CreatePrincipalRequest{
+						Kind: authkit.PrincipalKind("team"),
+					},
+				},
+				assertErr: func(t *testing.T, err error) {
+					require.Error(t, err)
+					require.NotErrorIs(t, err, authkit.ErrUnresolvedIdentity)
+				},
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				result, err := store.ProvisionIdentity(context.Background(), tt.req)
+
+				tt.assertErr(t, err)
+				assert.Empty(t, result)
+			})
+		}
+	})
+
+	t.Run("provision identity is idempotent under concurrency", func(t *testing.T) {
+		store := newStore(t)
+		ctx := context.Background()
+		start := make(chan struct{})
+		results := make(chan authkit.ProvisionIdentityResult, concurrentProvisionAttempts)
+		errs := make(chan error, concurrentProvisionAttempts)
+		var wg sync.WaitGroup
+
+		for range cap(results) {
+			wg.Go(func() {
+				<-start
+				result, err := store.ProvisionIdentity(ctx, provisionRequest())
+				if err != nil {
+					errs <- err
+
+					return
+				}
+				results <- result
+			})
+		}
+
+		close(start)
+		wg.Wait()
+		close(results)
+		close(errs)
+
+		for err := range errs {
+			require.NoError(t, err)
+		}
+
+		created := 0
+		principalID := ""
+		for result := range results {
+			if result.Created {
+				created++
+			}
+			if principalID == "" {
+				principalID = result.Principal.ID
+			}
+			assert.Equal(t, principalID, result.Principal.ID)
+			assert.Equal(t, principalID, result.Link.PrincipalID)
+		}
+		assert.Equal(t, 1, created)
+
+		resolved, err := store.ResolveIdentity(ctx, provisionRequest().Identity)
+		require.NoError(t, err)
+		require.NotNil(t, resolved)
+		assert.Equal(t, principalID, resolved.ID)
+	})
+
 	t.Run("trusted providers", func(t *testing.T) {
 		store := newStore(t)
 		provider := providerFixture()
@@ -378,6 +542,14 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 						Provider: testProvider,
 						Subject:  testSubject,
 					})
+
+					return runErr
+				},
+			},
+			{
+				name: "provision identity",
+				run: func() error {
+					_, runErr := store.ProvisionIdentity(ctx, provisionRequest())
 
 					return runErr
 				},
@@ -555,6 +727,22 @@ func providerFixture() oidc.Provider {
 		Audiences:                  []string{"notes-api"},
 		JWKSURL:                    "https://issuer.example/.well-known/jwks.json",
 		SupportedSigningAlgorithms: []string{"RS256"},
+	}
+}
+
+func provisionRequest() authkit.ProvisionIdentityRequest {
+	return authkit.ProvisionIdentityRequest{
+		Identity: authkit.Identity{
+			Provider: testProvider,
+			Subject:  testSubject,
+		},
+		Principal: authkit.CreatePrincipalRequest{
+			Kind:        authkit.PrincipalKindUser,
+			DisplayName: testDisplayName,
+			Attributes: map[string]any{
+				"email": "ada@example.test",
+			},
+		},
 	}
 }
 

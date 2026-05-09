@@ -32,6 +32,14 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+type sqlExecutor interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}
+
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 // NewStore constructs a PostgreSQL store around pool.
 func NewStore(pool *pgxpool.Pool) (*Store, error) {
 	if pool == nil {
@@ -55,6 +63,14 @@ func (s *Store) CreatePrincipal(
 		return authkit.Principal{}, fmt.Errorf("postgres: unsupported principal kind %q", req.Kind)
 	}
 
+	return createPrincipal(ctx, s.pool, req)
+}
+
+func createPrincipal(
+	ctx context.Context,
+	exec sqlExecutor,
+	req authkit.CreatePrincipalRequest,
+) (authkit.Principal, error) {
 	attributes, err := encodeAttributes(req.Attributes)
 	if err != nil {
 		return authkit.Principal{}, err
@@ -67,7 +83,7 @@ func (s *Store) CreatePrincipal(
 			DisplayName: req.DisplayName,
 			Attributes:  cloneAttributes(req.Attributes),
 		}
-		_, err := s.pool.Exec(
+		_, err := exec.Exec(
 			ctx,
 			`insert into authkit_principals (id, kind, display_name, attributes)
 			values ($1, $2, $3, nullif($4, '')::jsonb)`,
@@ -190,6 +206,105 @@ func (s *Store) ResolveIdentity(
 	}
 
 	return &principal, nil
+}
+
+// ProvisionIdentity creates and links a principal for identity or returns the existing link.
+func (s *Store) ProvisionIdentity(
+	ctx context.Context,
+	req authkit.ProvisionIdentityRequest,
+) (authkit.ProvisionIdentityResult, error) {
+	if err := ctx.Err(); err != nil {
+		return authkit.ProvisionIdentityResult{}, err
+	}
+	if req.Identity.Provider == "" || req.Identity.Subject == "" {
+		return authkit.ProvisionIdentityResult{}, fmt.Errorf(
+			"%w: provider and subject are required",
+			authkit.ErrUnresolvedIdentity,
+		)
+	}
+	if req.Principal.Kind != authkit.PrincipalKindUser && req.Principal.Kind != authkit.PrincipalKindService {
+		return authkit.ProvisionIdentityResult{}, fmt.Errorf(
+			"postgres: unsupported principal kind %q",
+			req.Principal.Kind,
+		)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return authkit.ProvisionIdentityResult{}, fmt.Errorf("postgres: begin provision identity: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	existing, err := findProvisionedIdentity(ctx, tx, req.Identity)
+	if err == nil {
+		if commitErr := tx.Commit(ctx); commitErr != nil {
+			return authkit.ProvisionIdentityResult{}, fmt.Errorf("postgres: commit provision identity: %w", commitErr)
+		}
+
+		return existing, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return authkit.ProvisionIdentityResult{}, fmt.Errorf("postgres: find provisioned identity: %w", err)
+	}
+
+	principal, err := createPrincipal(ctx, tx, req.Principal)
+	if err != nil {
+		return authkit.ProvisionIdentityResult{}, err
+	}
+
+	link := authkit.ExternalIdentity{
+		Provider:    req.Identity.Provider,
+		Subject:     req.Identity.Subject,
+		PrincipalID: principal.ID,
+	}
+	if _, err := tx.Exec(
+		ctx,
+		`insert into authkit_external_identities (provider, subject, principal_id)
+		values ($1, $2, $3)`,
+		link.Provider,
+		link.Subject,
+		link.PrincipalID,
+	); err != nil {
+		return s.handleProvisionIdentityLinkError(ctx, tx, req.Identity, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return authkit.ProvisionIdentityResult{}, fmt.Errorf("postgres: commit provision identity: %w", err)
+	}
+
+	return authkit.ProvisionIdentityResult{
+		Principal: principal,
+		Link:      link,
+		Created:   true,
+	}, nil
+}
+
+func (s *Store) handleProvisionIdentityLinkError(
+	ctx context.Context,
+	tx pgx.Tx,
+	identity authkit.Identity,
+	err error,
+) (authkit.ProvisionIdentityResult, error) {
+	if !isPostgresCode(err, uniqueViolation) {
+		return authkit.ProvisionIdentityResult{}, fmt.Errorf("postgres: link provisioned identity: %w", err)
+	}
+	if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+		return authkit.ProvisionIdentityResult{}, fmt.Errorf(
+			"postgres: rollback provision identity conflict: %w",
+			rollbackErr,
+		)
+	}
+
+	winner, findErr := findProvisionedIdentity(ctx, s.pool, identity)
+	if findErr != nil {
+		return authkit.ProvisionIdentityResult{}, fmt.Errorf(
+			"postgres: find provisioned identity conflict: %w",
+			findErr,
+		)
+	}
+
+	return winner, nil
 }
 
 // CreateToken stores token.
@@ -371,6 +486,50 @@ func (s *Store) findIdentityLink(
 	}
 
 	return link, nil
+}
+
+func findProvisionedIdentity(
+	ctx context.Context,
+	query rowQuerier,
+	identity authkit.Identity,
+) (authkit.ProvisionIdentityResult, error) {
+	var principal authkit.Principal
+	var kind string
+	var attributes string
+	var link authkit.ExternalIdentity
+	err := query.QueryRow(
+		ctx,
+		`select p.id, p.kind, p.display_name, coalesce(p.attributes::text, ''),
+			i.provider, i.subject, i.principal_id
+		from authkit_external_identities as i
+		join authkit_principals as p on p.id = i.principal_id
+		where i.provider = $1 and i.subject = $2`,
+		identity.Provider,
+		identity.Subject,
+	).Scan(
+		&principal.ID,
+		&kind,
+		&principal.DisplayName,
+		&attributes,
+		&link.Provider,
+		&link.Subject,
+		&link.PrincipalID,
+	)
+	if err != nil {
+		return authkit.ProvisionIdentityResult{}, err
+	}
+
+	principal.Kind = authkit.PrincipalKind(kind)
+	principal.Attributes, err = decodeAttributes(attributes)
+	if err != nil {
+		return authkit.ProvisionIdentityResult{}, err
+	}
+
+	return authkit.ProvisionIdentityResult{
+		Principal: principal,
+		Link:      link,
+		Created:   false,
+	}, nil
 }
 
 func (s *Store) resolveIdentityLinkConflict(

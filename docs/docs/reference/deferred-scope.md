@@ -19,6 +19,7 @@ authkit currently supports:
 - memory and Postgres storage for principals, identity links, API tokens, and OIDC provider trust
 - Go-level management service for setup flows
 - OIDC-issued JWT bearer-token authentication
+- opt-in principal auto-provisioning for caller-approved external identities
 - `net/http` middleware and context helpers
 - thin HTTP composition helpers
 - Casbin authorization adapter
@@ -31,7 +32,6 @@ The following items are intentionally out of scope:
 - hosted browser login
 - OAuth authorization server behavior
 - SAML, SCIM, MFA, and user-management workflows
-- auto-provisioning external identities
 - built-in admin HTTP APIs
 - router/framework-specific adapters
 - SQLite storage
