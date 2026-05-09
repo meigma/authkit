@@ -168,31 +168,20 @@ class GitHubApi:
         return self._request_json("POST", f"/repos/{owner}/{repo}/rulesets", payload, expected_statuses={201})
 
     def update_ruleset(self, owner: str, repo: str, ruleset_id: int, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._request_json("PATCH", f"/repos/{owner}/{repo}/rulesets/{ruleset_id}", payload)
+        return self._request_json("PUT", f"/repos/{owner}/{repo}/rulesets/{ruleset_id}", payload)
 
     def resolve_app_actor_id(self, owner: str, repo: str, slug: str) -> int:
         cache_key = (owner, repo, slug)
         if cache_key in self._app_slug_cache:
             return self._app_slug_cache[cache_key]
 
-        installations = self._paginate("/user/installations?per_page=100")
-        full_name = f"{owner}/{repo}".lower()
+        app = self._request_json("GET", f"/apps/{urllib.parse.quote(slug, safe='')}")
+        app_id = app.get("id")
+        if app_id is None:
+            raise ConfigError(f"Unable to resolve GitHub App slug {slug!r}")
 
-        for installation in installations:
-            if installation.get("app_slug") != slug:
-                continue
-
-            installation_id = installation.get("id")
-            app_id = installation.get("app_id")
-            if installation_id is None or app_id is None:
-                continue
-
-            repos = self._paginate(f"/user/installations/{installation_id}/repositories?per_page=100", array_key="repositories")
-            if any(item.get("full_name", "").lower() == full_name for item in repos):
-                self._app_slug_cache[cache_key] = int(app_id)
-                return int(app_id)
-
-        raise ConfigError(f"Unable to resolve GitHub App slug {slug!r} for {owner}/{repo}")
+        self._app_slug_cache[cache_key] = int(app_id)
+        return int(app_id)
 
     def _toggle_path(self, owner: str, repo: str, toggle_name: str) -> str:
         suffixes = {
