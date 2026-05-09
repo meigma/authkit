@@ -3,6 +3,7 @@
 javascript:
   packageManager: 'npm'
   inferTasksFromScripts: true
+  dedupeOnLockfileChange: false
 
 npm: {}
 

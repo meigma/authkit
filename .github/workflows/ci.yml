@@ -40,3 +40,9 @@ jobs:
 
       - name: Run Moon CI
         run: moon ci --summary minimal
+
+      - name: Typecheck docs
+        run: moon run docs:typecheck --summary minimal
+
+      - name: Build docs
+        run: moon run docs:build --summary minimal

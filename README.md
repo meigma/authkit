@@ -1,15 +1,15 @@
 # authkit
 
-authkit is an early-stage Go library for authentication and authorization in Web API services.
+authkit is a Go library for authentication and authorization in Web API services.
 It provides reusable request authentication, principal resolution, and authorization plumbing without becoming an identity provider, hosted login system, or policy framework.
 
-The current prototype proves the shared auth path end to end: an API token or OIDC-issued JWT bearer token authenticates to an external identity, the identity resolves to an internal principal, and Casbin authorizes that principal against an application resource.
+The shared auth path works end to end: an API token or OIDC-issued JWT bearer token authenticates to an external identity, the identity resolves to an internal principal, and Casbin authorizes that principal against an application resource.
 
 ## Status
 
-authkit is experimental and not API-stable.
+authkit's public API may change as service integrations shape the library.
 
-Implemented today:
+Included now:
 
 - core `authkit` identity, principal, resource, decision, and port contracts
 - an explicit `Identity -> Principal -> Authorizer` pipeline
@@ -23,7 +23,7 @@ Implemented today:
 - a thin Casbin authorizer adapter with replaceable request projection
 - `examples/notes`, a runnable vertical example that wires the real packages together
 
-Deferred for later phases:
+Deferred scope:
 
 - router-specific adapters
 - built-in admin HTTP APIs
@@ -39,6 +39,8 @@ For repository development, use the pinned toolchain in `.prototools` and run ch
 
 ```sh
 moon ci --summary minimal
+moon run docs:typecheck
+moon run docs:build
 ```
 
 ## Quick Start
@@ -69,7 +71,7 @@ The example is also covered by tests:
 go test ./examples/notes
 ```
 
-## Composition Shape
+## Using Authkit
 
 authkit has two composition layers:
 
@@ -77,110 +79,23 @@ authkit has two composition layers:
 - The `compose` package is the standard `net/http` helper for common API
   service wiring.
 
-For most `net/http` services, start with `compose.NewHTTP`. Applications still
-own storage, provider trust, Casbin enforcer and policy setup, seed credentials,
-and management workflows:
+For most `net/http` services, start with
+[Compose HTTP authentication](docs/docs/how-to/compose-http-auth.md).
+Applications that need full control can use
+[explicit composition](docs/docs/how-to/use-explicit-composition.md).
 
-```go
-store := memory.NewStore()
-tokenService, err := apikey.NewService(store)
-if err != nil {
-	return err
-}
-
-managementService, err := management.NewService(management.Options{
-	PrincipalCreator: store,
-	IdentityLinker:   store,
-	APITokens:        tokenService,
-})
-if err != nil {
-	return err
-}
-
-principal, err := managementService.CreatePrincipal(ctx, authkit.CreatePrincipalRequest{
-	Kind:        authkit.PrincipalKindService,
-	DisplayName: "deploy service",
-})
-if err != nil {
-	return err
-}
-
-issued, err := managementService.IssueAPIToken(ctx, management.IssueAPITokenRequest{
-	PrincipalID: principal.ID,
-	Name:        "deploy token",
-	ExpiresAt:   time.Now().Add(24 * time.Hour),
-})
-if err != nil {
-	return err
-}
-_ = issued.Plaintext // Show once to the operator.
-
-oidcSource, err := oidc.NewStaticProviderSource(oidc.Provider{
-	Issuer:    "https://issuer.example",
-	Audiences: []string{"notes-api"},
-	JWKSURL:   "https://issuer.example/.well-known/jwks.json",
-})
-if err != nil {
-	return err
-}
-
-// Memory and Postgres stores can also be used directly as mutable OIDC provider
-// trust sources by calling TrustProvider and passing the store to compose.OIDC.
-
-authorizer, err := authkitcasbin.NewAuthorizer(enforcer)
-if err != nil {
-	return err
-}
-
-kit, err := compose.NewHTTP(compose.HTTPOptions{
-	Authenticators: []compose.AuthenticatorSpec{
-		compose.APIToken(tokenService),
-		compose.OIDC(oidcSource, oidc.WithForwardedClaims("email", "name")),
-	},
-	Resolver:   store,
-	Authorizer: authorizer,
-})
-if err != nil {
-	return err
-}
-
-pipeline := kit.Pipeline
-middleware := kit.Middleware
-```
-
-The management service is a Go-level convenience for setup code. The
-`compose.NewHTTP` helper is a convenience for HTTP runtime wiring. Neither
-replaces the lower-level packages: applications that need maximum control can
-still call `apikey.NewAuthenticator`, `oidc.NewAuthenticator`,
-`authkit.NewPipeline`, and `httpauth.NewMiddleware` directly.
-`examples/notes` shows the runnable API-token version and tests the mixed
-API-token/OIDC path through the same principal, Casbin policy, HTTP route, and
-request pipeline.
-
-## Failure Mapping
-
-The core pipeline keeps failure categories distinct:
-
-- Missing, malformed, unknown, expired, revoked, or otherwise invalid credentials return `authkit.ErrUnauthenticated`.
-- A valid credential with no linked principal returns `authkit.ErrUnresolvedIdentity`.
-- A resolved principal denied by policy returns `authkit.ErrUnauthorized`.
-- Unexpected authenticator, resolver, authorizer, or resource-extractor failures return `authkit.ErrInternal`.
-- Context cancellation and deadline errors pass through unchanged.
-
-`httpauth` maps those categories by default:
-
-- `ErrUnauthenticated` and `ErrUnresolvedIdentity` -> HTTP 401
-- `ErrUnauthorized` -> HTTP 403
-- `ErrInternal` and unexpected failures -> HTTP 500
-
-Applications can replace the renderer with `httpauth.WithErrorRenderer`.
+The [architecture](docs/docs/explanations/architecture.md) and
+[security model](docs/docs/explanations/security-model.md) explain the request
+pipeline, credential independence, failure mapping, and security invariants.
 
 ## Documentation
 
-- Working design: [DESIGN.md](DESIGN.md)
-- Implementation plan: [PLAN.md](PLAN.md)
 - Docs home: [docs/docs/index.md](docs/docs/index.md)
-- Docusaurus design page: [docs/docs/design.md](docs/docs/design.md)
+- Tutorial: [Learn authkit with the notes service](docs/docs/tutorials/notes-service.md)
+- How-to: [Compose HTTP authentication](docs/docs/how-to/compose-http-auth.md)
+- Explanation: [Architecture](docs/docs/explanations/architecture.md)
+- Reference: [Extension points](docs/docs/reference/extension-points.md)
+- Implementation plan: [PLAN.md](PLAN.md)
 
 ## Support
 
