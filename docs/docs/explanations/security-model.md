@@ -55,18 +55,22 @@ Provider trust lookup and token validation fail closed. If authkit cannot find
 trusted provider configuration, cannot fetch or parse usable JWKS data, or
 cannot verify a token, the request is unauthenticated.
 
-Unexpected storage, provider, resolver, authorizer, or resource-extractor errors
-are treated as internal failures.
+Unexpected storage, provider, resolver, authorizer, or authorization-extractor
+errors are treated as internal failures.
 
 ## Authorization
 
 authkit does not grant permissions from arbitrary JWT claims. Verified claims
 can be forwarded for display, logging, or application-owned policy hooks, but
-the core authorization path is the resolved principal plus an action and
-resource.
+the core authorization path is the resolved principal plus an action, resource,
+and caller-supplied facts.
+
+Facts are decision-time context. authkit does not automatically inject HTTP
+request data, token claims, or provider-specific groups into authorization
+facts. Applications choose the facts they trust and pass them explicitly.
 
 The Casbin adapter uses the principal ID as the default subject. Applications
-own Casbin models, policy, role design, and policy storage.
+own Casbin models, policy, role design, fact projection, and policy storage.
 
 ## Non-Goals
 

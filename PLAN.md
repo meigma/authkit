@@ -11,7 +11,7 @@ and room to reshape the next step based on what implementation teaches us.
 
 The first API-token prototype is present in the repository:
 
-- core `authkit` identity, principal, resource, decision, and port contracts
+- core `authkit` identity, principal, resource, decision, authorization fact, and port contracts
 - explicit `Identity -> Principal -> Authorizer` request pipeline
 - memory-backed principal, identity-link, and API-token storage
 - opaque API-token issuing, verification, revocation, expiration, and last-used tracking
@@ -29,7 +29,7 @@ or a high-level composition builder.
 
 - Preserve the central invariant: credentials authenticate to `Identity`,
   identities resolve to internal `Principal`, and authorization operates on
-  `Principal + action + Resource`.
+  `Principal + action + Resource + caller-supplied Facts`.
 - Keep explicit composition as the architectural foundation. Convenience APIs
   can wrap the common path later, but they must not hide or replace the ports.
 - Prove each new capability through a real vertical path before broadening it.

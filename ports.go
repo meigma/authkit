@@ -20,8 +20,8 @@ type PrincipalResolver interface {
 	ResolveIdentity(ctx context.Context, identity Identity) (*Principal, error)
 }
 
-// Authorizer decides whether a principal may perform an action on a resource.
+// Authorizer decides whether an authorization check is allowed.
 type Authorizer interface {
-	// Can returns the authorization decision for principal, action, and resource.
-	Can(ctx context.Context, principal Principal, action string, resource Resource) (Decision, error)
+	// Can returns the authorization decision for check.
+	Can(ctx context.Context, check AuthorizationCheck) (Decision, error)
 }

@@ -67,7 +67,7 @@ func TestDefaultRequestBuilderProjectsClassicCasbinRequest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := DefaultRequestBuilder(testPrincipal(), "note:update", tt.resource)
+			got, err := DefaultRequestBuilder(testCheck("note:update", tt.resource))
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
@@ -108,7 +108,11 @@ func TestDefaultRequestBuilderValidatesRequiredInputs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := DefaultRequestBuilder(tt.principal, tt.action, tt.resource)
+			got, err := DefaultRequestBuilder(authkit.AuthorizationCheck{
+				Principal: tt.principal,
+				Action:    tt.action,
+				Resource:  tt.resource,
+			})
 
 			require.ErrorContains(t, err, tt.want)
 			assert.Nil(t, got)
@@ -128,9 +132,7 @@ func TestAuthorizerCanAllowsPolicy(t *testing.T) {
 
 	decision, err := authorizer.Can(
 		context.Background(),
-		testPrincipal(),
-		"note:update",
-		testResource("note", "note-1"),
+		testCheck("note:update", testResource("note", "note-1")),
 	)
 
 	require.NoError(t, err)
@@ -143,9 +145,7 @@ func TestAuthorizerCanDeniesPolicy(t *testing.T) {
 
 	decision, err := authorizer.Can(
 		context.Background(),
-		testPrincipal(),
-		"note:update",
-		testResource("note", "note-1"),
+		testCheck("note:update", testResource("note", "note-1")),
 	)
 
 	require.NoError(t, err)
@@ -162,13 +162,14 @@ func TestAuthorizerCanUsesCustomRequestBuilder(t *testing.T) {
 				return true, nil
 			},
 		},
-		WithRequestBuilder(func(principal authkit.Principal, action string, resource authkit.Resource) ([]any, error) {
+		WithRequestBuilder(func(check authkit.AuthorizationCheck) ([]any, error) {
 			return []any{
-				principal.Kind,
-				principal.ID,
-				resource.Type,
-				resource.ID,
-				action,
+				check.Principal.Kind,
+				check.Principal.ID,
+				check.Resource.Type,
+				check.Resource.ID,
+				check.Facts["tenant_id"],
+				check.Action,
 			}, nil
 		}),
 	)
@@ -176,9 +177,14 @@ func TestAuthorizerCanUsesCustomRequestBuilder(t *testing.T) {
 
 	decision, err := authorizer.Can(
 		context.Background(),
-		testPrincipal(),
-		"note:update",
-		testResource("note", "note-1"),
+		authkit.AuthorizationCheck{
+			Principal: testPrincipal(),
+			Action:    "note:update",
+			Resource:  testResource("note", "note-1"),
+			Facts: authkit.Facts{
+				"tenant_id": "tenant-1",
+			},
+		},
 	)
 
 	require.NoError(t, err)
@@ -188,6 +194,7 @@ func TestAuthorizerCanUsesCustomRequestBuilder(t *testing.T) {
 		"principal_1",
 		"note",
 		"note-1",
+		"tenant-1",
 		"note:update",
 	}, gotRequest)
 }
@@ -203,7 +210,7 @@ func TestAuthorizerCanReturnsProjectionErrors(t *testing.T) {
 				return true, nil
 			},
 		},
-		WithRequestBuilder(func(authkit.Principal, string, authkit.Resource) ([]any, error) {
+		WithRequestBuilder(func(authkit.AuthorizationCheck) ([]any, error) {
 			return nil, projectionErr
 		}),
 	)
@@ -211,9 +218,7 @@ func TestAuthorizerCanReturnsProjectionErrors(t *testing.T) {
 
 	decision, err := authorizer.Can(
 		context.Background(),
-		testPrincipal(),
-		"note:update",
-		testResource("note", "note-1"),
+		testCheck("note:update", testResource("note", "note-1")),
 	)
 
 	require.ErrorIs(t, err, projectionErr)
@@ -263,7 +268,11 @@ func TestAuthorizerCanReturnsDefaultProjectionErrors(t *testing.T) {
 				},
 			})
 
-			decision, err := authorizer.Can(context.Background(), tt.principal, tt.action, tt.resource)
+			decision, err := authorizer.Can(context.Background(), authkit.AuthorizationCheck{
+				Principal: tt.principal,
+				Action:    tt.action,
+				Resource:  tt.resource,
+			})
 
 			require.ErrorContains(t, err, tt.want)
 			assert.Empty(t, decision)
@@ -282,9 +291,7 @@ func TestAuthorizerCanReturnsEnforcerErrors(t *testing.T) {
 
 	decision, err := authorizer.Can(
 		context.Background(),
-		testPrincipal(),
-		"note:update",
-		testResource("note", "note-1"),
+		testCheck("note:update", testResource("note", "note-1")),
 	)
 
 	require.ErrorIs(t, err, enforcerErr)
@@ -304,7 +311,7 @@ func TestAuthorizerCanReturnsContextErrorBeforeProjection(t *testing.T) {
 				return true, nil
 			},
 		},
-		WithRequestBuilder(func(authkit.Principal, string, authkit.Resource) ([]any, error) {
+		WithRequestBuilder(func(authkit.AuthorizationCheck) ([]any, error) {
 			builderCalls++
 
 			return []any{"principal_1", "note:note-1", "note:update"}, nil
@@ -314,9 +321,7 @@ func TestAuthorizerCanReturnsContextErrorBeforeProjection(t *testing.T) {
 
 	decision, err := authorizer.Can(
 		ctx,
-		testPrincipal(),
-		"note:update",
-		testResource("note", "note-1"),
+		testCheck("note:update", testResource("note", "note-1")),
 	)
 
 	require.ErrorIs(t, err, context.Canceled)
@@ -333,17 +338,13 @@ func TestAuthorizerCanUsesRealCasbinEnforcer(t *testing.T) {
 
 	allowed, err := authorizer.Can(
 		context.Background(),
-		testPrincipal(),
-		"note:update",
-		testResource("note", "note-1"),
+		testCheck("note:update", testResource("note", "note-1")),
 	)
 	require.NoError(t, err)
 
 	denied, err := authorizer.Can(
 		context.Background(),
-		testPrincipal(),
-		"note:delete",
-		testResource("note", "note-1"),
+		testCheck("note:delete", testResource("note", "note-1")),
 	)
 	require.NoError(t, err)
 
@@ -389,6 +390,14 @@ func testPrincipal() authkit.Principal {
 		ID:          "principal_1",
 		Kind:        authkit.PrincipalKindUser,
 		DisplayName: "Ada Lovelace",
+	}
+}
+
+func testCheck(action string, resource authkit.Resource) authkit.AuthorizationCheck {
+	return authkit.AuthorizationCheck{
+		Principal: testPrincipal(),
+		Action:    action,
+		Resource:  resource,
 	}
 }
 

@@ -43,7 +43,10 @@ type Authorization struct {
 	// Authentication is the authenticated and resolved request subject.
 	Authentication Authentication
 
-	// Decision is the authorizer decision for the requested action and resource.
+	// Check is the complete input used for the authorizer decision.
+	Check AuthorizationCheck
+
+	// Decision is the authorizer decision for Check.
 	Decision Decision
 }
 
@@ -143,12 +146,11 @@ func (p *Pipeline) authenticateWith(
 	return authentication, true, nil
 }
 
-// Authorize authenticates req, resolves its principal, and checks action against resource.
+// Authorize authenticates req, resolves its principal, and evaluates authorization.
 func (p *Pipeline) Authorize(
 	ctx context.Context,
 	req *http.Request,
-	action string,
-	resource Resource,
+	authorizationRequest AuthorizationRequest,
 ) (Authorization, error) {
 	authentication, err := p.Authenticate(ctx, req)
 	authorization := Authorization{
@@ -158,7 +160,28 @@ func (p *Pipeline) Authorize(
 		return authorization, err
 	}
 
-	decision, err := p.authorizer.Can(ctx, authentication.Principal, action, resource)
+	return p.AuthorizeAuthenticated(ctx, authentication, authorizationRequest)
+}
+
+// AuthorizeAuthenticated evaluates authorization for an already authenticated request subject.
+func (p *Pipeline) AuthorizeAuthenticated(
+	ctx context.Context,
+	authentication Authentication,
+	authorizationRequest AuthorizationRequest,
+) (Authorization, error) {
+	authorization := Authorization{
+		Authentication: authentication,
+	}
+
+	check := AuthorizationCheck{
+		Principal: authentication.Principal,
+		Action:    authorizationRequest.Action,
+		Resource:  authorizationRequest.Resource,
+		Facts:     authorizationRequest.Facts.Clone(),
+	}
+	authorization.Check = check
+
+	decision, err := p.authorizer.Can(ctx, check)
 	authorization.Decision = decision
 	if err != nil {
 		if isContextError(err) {

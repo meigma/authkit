@@ -19,11 +19,22 @@ Authenticator -> Identity -> PrincipalResolver -> Principal -> Authorizer
 
 An `Authenticator` verifies a credential on an HTTP request and returns an
 external `Identity`. A `PrincipalResolver` maps that external identity to an
-internal `Principal`. An `Authorizer` decides whether the principal can perform
-an action on a resource.
+internal `Principal`. An `Authorizer` decides whether an authorization check
+containing the principal, action, resource, and caller-supplied facts is allowed.
 
 The invariant is credential independence: permissions attach to the internal
 principal, not to a token, JWT, email address, or provider-specific user record.
+
+## Authorization Facts
+
+`authkit.Facts` is a generic decision-time context bag. Applications supply
+facts per authorization decision for data such as tenant, environment, request
+source, or loaded resource state. Facts are not injected automatically and do
+not become durable principal or resource metadata.
+
+`Principal.Attributes` remains application-owned actor metadata.
+`Resource.Attr` remains resource metadata. `AuthorizationRequest.Facts` is for
+the current decision.
 
 ## Ports And Adapters
 
@@ -38,6 +49,7 @@ Adapters sit at the edges:
 - `oidc` verifies signed JWT bearer tokens from trusted issuers.
 - `provisioning` can create principals for caller-approved unresolved identities.
 - `httpauth` adapts a pipeline to `net/http`.
+- `httpfacts` provides optional helpers for deriving facts from HTTP requests.
 - `casbin` adapts Casbin enforcement to the `authkit.Authorizer` port.
 - `store/memory` and `store/postgres` implement storage contracts.
 - `compose` wires common HTTP setups without replacing the lower-level ports.
@@ -80,8 +92,11 @@ permission grants.
 ## HTTP Runtime
 
 `httpauth.Middleware` stores the resolved authentication data in request context.
-Authorization wrappers extract a resource from the request, pass the principal,
-action, and resource to the authorizer, and call the handler only when the
+Authorization wrappers extract an authorization request from HTTP request state,
+then pass the resolved principal, action, resource, and facts to the authorizer.
+`RequireAuthorization` authenticates before it calls the extractor, so extractors
+can read the resolved authentication from request context and unauthenticated
+requests do not trigger resource or fact loading. The handler runs only when the
 decision allows it.
 
 Default HTTP failure mapping is:

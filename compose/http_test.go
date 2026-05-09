@@ -286,12 +286,7 @@ func (r testResolver) ResolveIdentity(
 
 type testAuthorizer struct{}
 
-func (a testAuthorizer) Can(
-	_ context.Context,
-	_ authkit.Principal,
-	_ string,
-	_ authkit.Resource,
-) (authkit.Decision, error) {
+func (a testAuthorizer) Can(_ context.Context, _ authkit.AuthorizationCheck) (authkit.Decision, error) {
 	return authkit.Decision{Allowed: true}, nil
 }
 

@@ -73,15 +73,11 @@ func TestMiddlewareAuthenticateRendersUnauthenticated(t *testing.T) {
 
 func TestMiddlewareRequireAllowsRequest(t *testing.T) {
 	authorizer := testAuthorizer{
-		can: func(
-			_ context.Context,
-			principal authkit.Principal,
-			action string,
-			resource authkit.Resource,
-		) (authkit.Decision, error) {
-			assert.Equal(t, testPrincipal(), principal)
-			assert.Equal(t, "note:update", action)
-			assert.Equal(t, testResource("note-1"), resource)
+		can: func(_ context.Context, check authkit.AuthorizationCheck) (authkit.Decision, error) {
+			assert.Equal(t, testPrincipal(), check.Principal)
+			assert.Equal(t, "note:update", check.Action)
+			assert.Equal(t, testResource("note-1"), check.Resource)
+			assert.Empty(t, check.Facts)
 
 			return authkit.Decision{Allowed: true}, nil
 		},
@@ -126,14 +122,10 @@ func TestMiddlewareRequireRendersDeniedDecision(t *testing.T) {
 
 func TestMiddlewareRequireFuncExtractsResource(t *testing.T) {
 	authorizer := testAuthorizer{
-		can: func(
-			_ context.Context,
-			_ authkit.Principal,
-			action string,
-			resource authkit.Resource,
-		) (authkit.Decision, error) {
-			assert.Equal(t, "note:read", action)
-			assert.Equal(t, testResource("42"), resource)
+		can: func(_ context.Context, check authkit.AuthorizationCheck) (authkit.Decision, error) {
+			assert.Equal(t, "note:read", check.Action)
+			assert.Equal(t, testResource("42"), check.Resource)
+			assert.Empty(t, check.Facts)
 
 			return authkit.Decision{Allowed: true}, nil
 		},
@@ -152,6 +144,83 @@ func TestMiddlewareRequireFuncExtractsResource(t *testing.T) {
 	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/notes/42", nil))
 
 	assert.Equal(t, http.StatusOK, recorder.Code)
+}
+
+func TestMiddlewareRequireAuthorizationExtractsFacts(t *testing.T) {
+	authenticatorCalls := 0
+	authorizer := testAuthorizer{
+		can: func(_ context.Context, check authkit.AuthorizationCheck) (authkit.Decision, error) {
+			assert.Equal(t, "note:read", check.Action)
+			assert.Equal(t, testResource("42"), check.Resource)
+			assert.Equal(t, authkit.Facts{
+				"request_method": "GET",
+				"tenant_id":      "tenant-1",
+			}, check.Facts)
+
+			return authkit.Decision{Allowed: true}, nil
+		},
+	}
+	pipeline := newTestPipelineWithAuthenticator(
+		t,
+		testAuthenticator{
+			name: "test",
+			authenticate: func(context.Context, *http.Request) (*authkit.Identity, error) {
+				authenticatorCalls++
+
+				identity := testIdentity()
+
+				return &identity, nil
+			},
+		},
+		authorizer,
+	)
+	middleware := newMiddleware(t, pipeline)
+	handler := middleware.RequireAuthorization(func(req *http.Request) (authkit.AuthorizationRequest, error) {
+		assertAuthenticationContext(req.Context(), t)
+
+		return authkit.AuthorizationRequest{
+			Action:   "note:read",
+			Resource: testResource(req.PathValue("noteID")),
+			Facts: authkit.Facts{
+				"request_method": req.Method,
+				"tenant_id":      req.Header.Get("X-Tenant-Id"),
+			},
+		}, nil
+	})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	mux := http.NewServeMux()
+	mux.Handle("GET /notes/{noteID}", handler)
+	req := httptest.NewRequest(http.MethodGet, "/notes/42", nil)
+	req.Header.Set("X-Tenant-Id", "tenant-1")
+
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, 1, authenticatorCalls)
+}
+
+func TestMiddlewareRequireAuthorizationDoesNotExtractWhenUnauthenticated(t *testing.T) {
+	extractorCalls := 0
+	pipeline := newTestPipelineWithAuthenticator(t, denyAuthenticator("test"), allowAuthorizer())
+	middleware := newMiddleware(t, pipeline)
+	handler := middleware.RequireAuthorization(func(*http.Request) (authkit.AuthorizationRequest, error) {
+		extractorCalls++
+
+		return authkit.AuthorizationRequest{
+			Action:   "note:read",
+			Resource: testResource("42"),
+		}, nil
+	})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/notes/42", nil))
+
+	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+	assert.Equal(t, 0, extractorCalls)
 }
 
 func TestMiddlewareRequireFuncRendersExtractorFailureAsInternal(t *testing.T) {
@@ -291,7 +360,7 @@ func newTestPipeline(t *testing.T, decision authkit.Decision) *authkit.Pipeline 
 	t.Helper()
 
 	return newTestPipelineWithAuthorizer(t, testAuthorizer{
-		can: func(context.Context, authkit.Principal, string, authkit.Resource) (authkit.Decision, error) {
+		can: func(context.Context, authkit.AuthorizationCheck) (authkit.Decision, error) {
 			return decision, nil
 		},
 	})
@@ -409,16 +478,11 @@ func (r testResolver) ResolveIdentity(ctx context.Context, identity authkit.Iden
 }
 
 type testAuthorizer struct {
-	can func(context.Context, authkit.Principal, string, authkit.Resource) (authkit.Decision, error)
+	can func(context.Context, authkit.AuthorizationCheck) (authkit.Decision, error)
 }
 
-func (a testAuthorizer) Can(
-	ctx context.Context,
-	principal authkit.Principal,
-	action string,
-	resource authkit.Resource,
-) (authkit.Decision, error) {
-	return a.can(ctx, principal, action, resource)
+func (a testAuthorizer) Can(ctx context.Context, check authkit.AuthorizationCheck) (authkit.Decision, error) {
+	return a.can(ctx, check)
 }
 
 func allowAuthenticator() testAuthenticator {
@@ -457,7 +521,7 @@ func allowResolver() testResolver {
 
 func allowAuthorizer() testAuthorizer {
 	return testAuthorizer{
-		can: func(context.Context, authkit.Principal, string, authkit.Resource) (authkit.Decision, error) {
+		can: func(context.Context, authkit.AuthorizationCheck) (authkit.Decision, error) {
 			return authkit.Decision{Allowed: true}, nil
 		},
 	}
