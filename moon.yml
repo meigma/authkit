@@ -28,6 +28,11 @@ fileGroups:
     - '.golangci.yml'
     - '.prototools'
     - '.moon/proto/golangci-lint.toml'
+  releaseConfig:
+    - '.github/workflows/release-please.yml'
+    - '.github/repository-settings.toml'
+    - 'release-please-config.json'
+    - '.release-please-manifest.json'
 
 tasks:
   build:
@@ -79,6 +84,8 @@ tasks:
       - 'root:build'
       - 'root:test'
       - 'root:integration'
+    inputs:
+      - '@group(releaseConfig)'
     options:
       cache: false
       runInCI: true
