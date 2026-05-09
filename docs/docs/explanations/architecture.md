@@ -60,7 +60,7 @@ source, or loaded resource state. Facts are not injected automatically and do
 not become durable principal or resource metadata.
 
 `Principal.Attributes` remains application-owned actor metadata.
-`Resource.Attr` remains resource metadata. `AuthorizationRequest.Facts` is for
+`Resource.Attributes` remains resource metadata. `AuthorizationRequest.Facts` is for
 the current decision.
 
 Facts are deliberately supplied by the route or application layer. authkit does

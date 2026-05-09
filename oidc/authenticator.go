@@ -152,12 +152,12 @@ func (a *Authenticator) Authenticate(ctx context.Context, req *http.Request) (*a
 
 func bearerToken(req *http.Request) (string, error) {
 	header := req.Header.Get("Authorization")
-	scheme, token, ok := strings.Cut(header, " ")
-	if !ok || scheme != bearerScheme || token == "" || strings.Contains(token, " ") {
+	parts := strings.Fields(header)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], bearerScheme) {
 		return "", unauthenticated("bearer token is required")
 	}
 
-	return token, nil
+	return parts[1], nil
 }
 
 func unverifiedIssuer(rawToken string) (string, error) {
