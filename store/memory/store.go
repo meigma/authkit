@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -24,6 +25,7 @@ type Store struct {
 	roles               map[string]authkit.Role
 	roleActions         map[string]map[string]struct{}
 	principalRoles      map[string]map[string]struct{}
+	provisioningRules   map[string]authkit.ProvisioningRule
 	links               map[identityKey]authkit.ExternalIdentity
 	tokens              map[string]apikey.StoredToken
 	providers           map[string]oidc.Provider
@@ -42,6 +44,7 @@ func NewStore() *Store {
 		roles:               make(map[string]authkit.Role),
 		roleActions:         make(map[string]map[string]struct{}),
 		principalRoles:      make(map[string]map[string]struct{}),
+		provisioningRules:   make(map[string]authkit.ProvisioningRule),
 		links:               make(map[identityKey]authkit.ExternalIdentity),
 		tokens:              make(map[string]apikey.StoredToken),
 		providers:           make(map[string]oidc.Provider),
@@ -185,6 +188,123 @@ func (s *Store) ResolvePrincipalActions(ctx context.Context, principalID string)
 	return resolved, nil
 }
 
+// CreateProvisioningRule creates a provisioning rule in the store.
+func (s *Store) CreateProvisioningRule(
+	ctx context.Context,
+	req authkit.CreateProvisioningRuleRequest,
+) (authkit.ProvisioningRule, error) {
+	if err := ctx.Err(); err != nil {
+		return authkit.ProvisioningRule{}, err
+	}
+
+	rule := provisioningRuleFromCreate(req)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.provisioningRules[rule.ID]; ok {
+		return authkit.ProvisioningRule{}, fmt.Errorf("memory: provisioning rule %q already exists", rule.ID)
+	}
+	if err := s.validateProvisioningRuleLocked(rule); err != nil {
+		return authkit.ProvisioningRule{}, err
+	}
+
+	s.provisioningRules[rule.ID] = cloneProvisioningRule(rule)
+
+	return cloneProvisioningRule(rule), nil
+}
+
+// UpdateProvisioningRule replaces a provisioning rule in the store.
+func (s *Store) UpdateProvisioningRule(
+	ctx context.Context,
+	req authkit.UpdateProvisioningRuleRequest,
+) (authkit.ProvisioningRule, error) {
+	if err := ctx.Err(); err != nil {
+		return authkit.ProvisioningRule{}, err
+	}
+
+	rule := provisioningRuleFromUpdate(req)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.provisioningRules[rule.ID]; !ok {
+		return authkit.ProvisioningRule{}, authkit.ErrProvisioningRuleNotFound
+	}
+	if err := s.validateProvisioningRuleLocked(rule); err != nil {
+		return authkit.ProvisioningRule{}, err
+	}
+
+	s.provisioningRules[rule.ID] = cloneProvisioningRule(rule)
+
+	return cloneProvisioningRule(rule), nil
+}
+
+// DeleteProvisioningRule deletes a provisioning rule from the store.
+func (s *Store) DeleteProvisioningRule(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if id == "" {
+		return errors.New("memory: provisioning rule ID is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.provisioningRules[id]; !ok {
+		return authkit.ErrProvisioningRuleNotFound
+	}
+
+	delete(s.provisioningRules, id)
+
+	return nil
+}
+
+// FindProvisioningRule returns a provisioning rule by ID.
+func (s *Store) FindProvisioningRule(ctx context.Context, id string) (authkit.ProvisioningRule, error) {
+	if err := ctx.Err(); err != nil {
+		return authkit.ProvisioningRule{}, err
+	}
+	if id == "" {
+		return authkit.ProvisioningRule{}, errors.New("memory: provisioning rule ID is required")
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rule, ok := s.provisioningRules[id]
+	if !ok {
+		return authkit.ProvisioningRule{}, authkit.ErrProvisioningRuleNotFound
+	}
+
+	return cloneProvisioningRule(rule), nil
+}
+
+// ListProvisioningRules returns all provisioning rules.
+func (s *Store) ListProvisioningRules(ctx context.Context) ([]authkit.ProvisioningRule, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if len(s.provisioningRules) == 0 {
+		return nil, nil
+	}
+
+	rules := make([]authkit.ProvisioningRule, 0, len(s.provisioningRules))
+	for _, rule := range s.provisioningRules {
+		rules = append(rules, cloneProvisioningRule(rule))
+	}
+	sort.Slice(rules, func(i, j int) bool {
+		return rules[i].ID < rules[j].ID
+	})
+
+	return rules, nil
+}
+
 // LinkIdentity links an external identity to an existing principal.
 func (s *Store) LinkIdentity(ctx context.Context, req authkit.LinkIdentityRequest) (authkit.ExternalIdentity, error) {
 	if err := ctx.Err(); err != nil {
@@ -315,6 +435,9 @@ func (s *Store) ProvisionIdentity(
 			Created:   false,
 		}, nil
 	}
+	if err := s.validateInitialRolesLocked(req.InitialRoleIDs); err != nil {
+		return authkit.ProvisionIdentityResult{}, err
+	}
 
 	principal := authkit.Principal{
 		ID:          principalIDPrefix + strconv.Itoa(s.nextPrincipalNumber),
@@ -331,6 +454,7 @@ func (s *Store) ProvisionIdentity(
 		PrincipalID: principal.ID,
 	}
 	s.links[key] = link
+	assignInitialRoles(s.principalRoles, principal.ID, req.InitialRoleIDs)
 
 	return authkit.ProvisionIdentityResult{
 		Principal: clonePrincipal(principal),
@@ -395,6 +519,7 @@ func clonePrincipal(principal authkit.Principal) authkit.Principal {
 func cloneProvider(provider oidc.Provider) oidc.Provider {
 	provider.Audiences = cloneStrings(provider.Audiences)
 	provider.SupportedSigningAlgorithms = cloneStrings(provider.SupportedSigningAlgorithms)
+	provider.ForwardedClaims = cloneClaimPaths(provider.ForwardedClaims)
 
 	return provider
 }
@@ -406,6 +531,143 @@ func cloneStrings(values []string) []string {
 
 	cloned := make([]string, len(values))
 	copy(cloned, values)
+
+	return cloned
+}
+
+func (s *Store) validateProvisioningRuleLocked(rule authkit.ProvisioningRule) error {
+	if rule.ID == "" {
+		return errors.New("memory: provisioning rule ID is required")
+	}
+	if rule.Provider == "" {
+		return errors.New("memory: provisioning rule provider is required")
+	}
+	provider, ok := s.providers[rule.Provider]
+	if !ok {
+		return fmt.Errorf("memory: provider %q is not trusted", rule.Provider)
+	}
+	if !rule.ClaimPath.Valid() {
+		return errors.New("memory: provisioning rule claim path is required")
+	}
+	if !providerForwardsClaim(provider, rule.ClaimPath) {
+		return fmt.Errorf("memory: provider %q does not forward claim path", rule.Provider)
+	}
+	if err := validateRequiredStrings("provisioning rule value", rule.Values); err != nil {
+		return fmt.Errorf("memory: %w", err)
+	}
+	if err := validateRequiredStrings("provisioning rule role ID", rule.AssignRoleIDs); err != nil {
+		return fmt.Errorf("memory: %w", err)
+	}
+	for _, roleID := range rule.AssignRoleIDs {
+		if _, ok := s.roles[roleID]; !ok {
+			return fmt.Errorf("memory: role %q does not exist", roleID)
+		}
+	}
+
+	return nil
+}
+
+func (s *Store) validateInitialRolesLocked(roleIDs []string) error {
+	if err := validateNonEmptyStrings("initial role ID", roleIDs); err != nil {
+		return fmt.Errorf("memory: %w", err)
+	}
+	for _, roleID := range roleIDs {
+		if _, ok := s.roles[roleID]; !ok {
+			return fmt.Errorf("memory: role %q does not exist", roleID)
+		}
+	}
+
+	return nil
+}
+
+func providerForwardsClaim(provider oidc.Provider, path authkit.ClaimPath) bool {
+	return slices.ContainsFunc(provider.ForwardedClaims, func(candidate authkit.ClaimPath) bool {
+		return slices.Equal(candidate, path)
+	})
+}
+
+func provisioningRuleFromCreate(req authkit.CreateProvisioningRuleRequest) authkit.ProvisioningRule {
+	return authkit.ProvisioningRule{
+		ID:            req.ID,
+		DisplayName:   req.DisplayName,
+		Provider:      req.Provider,
+		ClaimPath:     cloneClaimPath(req.ClaimPath),
+		Values:        cloneStrings(req.Values),
+		AssignRoleIDs: cloneStrings(req.AssignRoleIDs),
+		Enabled:       req.Enabled,
+	}
+}
+
+func provisioningRuleFromUpdate(req authkit.UpdateProvisioningRuleRequest) authkit.ProvisioningRule {
+	return authkit.ProvisioningRule{
+		ID:            req.ID,
+		DisplayName:   req.DisplayName,
+		Provider:      req.Provider,
+		ClaimPath:     cloneClaimPath(req.ClaimPath),
+		Values:        cloneStrings(req.Values),
+		AssignRoleIDs: cloneStrings(req.AssignRoleIDs),
+		Enabled:       req.Enabled,
+	}
+}
+
+func cloneProvisioningRule(rule authkit.ProvisioningRule) authkit.ProvisioningRule {
+	rule.ClaimPath = cloneClaimPath(rule.ClaimPath)
+	rule.Values = cloneStrings(rule.Values)
+	rule.AssignRoleIDs = cloneStrings(rule.AssignRoleIDs)
+
+	return rule
+}
+
+func assignInitialRoles(principalRoles map[string]map[string]struct{}, principalID string, roleIDs []string) {
+	if len(roleIDs) == 0 {
+		return
+	}
+	if _, ok := principalRoles[principalID]; !ok {
+		principalRoles[principalID] = make(map[string]struct{})
+	}
+	for _, roleID := range roleIDs {
+		principalRoles[principalID][roleID] = struct{}{}
+	}
+}
+
+func validateNonEmptyStrings(name string, values []string) error {
+	for i, value := range values {
+		if value == "" {
+			return fmt.Errorf("%s %d is required", name, i)
+		}
+	}
+
+	return nil
+}
+
+func validateRequiredStrings(name string, values []string) error {
+	if len(values) == 0 {
+		return fmt.Errorf("%s is required", name)
+	}
+
+	return validateNonEmptyStrings(name, values)
+}
+
+func cloneClaimPaths(paths []authkit.ClaimPath) []authkit.ClaimPath {
+	if len(paths) == 0 {
+		return nil
+	}
+
+	cloned := make([]authkit.ClaimPath, len(paths))
+	for i, path := range paths {
+		cloned[i] = cloneClaimPath(path)
+	}
+
+	return cloned
+}
+
+func cloneClaimPath(path authkit.ClaimPath) authkit.ClaimPath {
+	if len(path) == 0 {
+		return nil
+	}
+
+	cloned := make(authkit.ClaimPath, len(path))
+	copy(cloned, path)
 
 	return cloned
 }

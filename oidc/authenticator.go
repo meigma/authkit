@@ -30,7 +30,7 @@ type Authenticator struct {
 	httpClient      *http.Client
 	clock           func() time.Time
 	acceptableSkew  time.Duration
-	forwardedClaims []string
+	forwardedClaims []authkit.ClaimPath
 	keySetCacheTTL  time.Duration
 
 	mu       sync.Mutex
@@ -67,7 +67,7 @@ func NewAuthenticator(source ProviderSource, opts ...Option) (*Authenticator, er
 		httpClient:      cfg.httpClient,
 		clock:           cfg.clock,
 		acceptableSkew:  cfg.acceptableSkew,
-		forwardedClaims: cloneStrings(cfg.forwardedClaims),
+		forwardedClaims: cloneClaimPaths(cfg.forwardedClaims),
 		keySetCacheTTL:  cfg.keySetCacheTTL,
 		keySets:         make(map[string]cachedKeySet),
 		requests:        make(map[string]*keySetRequest),
@@ -141,7 +141,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, req *http.Request) (*a
 	identity := &authkit.Identity{
 		Provider: provider.Issuer,
 		Subject:  subject,
-		Claims:   a.forwardClaims(token),
+		Claims:   a.forwardClaims(token, provider),
 	}
 	if jwtID, ok := token.JwtID(); ok {
 		identity.CredentialID = jwtID
@@ -193,16 +193,21 @@ func audienceAllowed(token jwt.Token, audiences []string) bool {
 	return false
 }
 
-func (a *Authenticator) forwardClaims(token jwt.Token) map[string]any {
-	if len(a.forwardedClaims) == 0 {
+func (a *Authenticator) forwardClaims(token jwt.Token, provider Provider) map[string]any {
+	paths := mergedForwardedClaims(provider.ForwardedClaims, a.forwardedClaims)
+	if len(paths) == 0 {
 		return nil
 	}
 
-	claims := make(map[string]any, len(a.forwardedClaims))
-	for _, name := range a.forwardedClaims {
-		var value any
-		if err := token.Get(name, &value); err == nil {
-			claims[name] = value
+	claims := make(map[string]any, len(paths))
+	for _, path := range paths {
+		if !path.Valid() {
+			continue
+		}
+
+		value, ok := tokenClaim(token, path)
+		if ok {
+			setClaim(claims, path, value)
 		}
 	}
 	if len(claims) == 0 {
@@ -210,6 +215,66 @@ func (a *Authenticator) forwardClaims(token jwt.Token) map[string]any {
 	}
 
 	return claims
+}
+
+func mergedForwardedClaims(
+	providerClaims []authkit.ClaimPath,
+	staticClaims []authkit.ClaimPath,
+) []authkit.ClaimPath {
+	if len(providerClaims) == 0 && len(staticClaims) == 0 {
+		return nil
+	}
+
+	claims := make([]authkit.ClaimPath, 0, len(providerClaims)+len(staticClaims))
+	seen := make(map[string]struct{}, len(providerClaims)+len(staticClaims))
+	for _, path := range append(cloneClaimPaths(providerClaims), staticClaims...) {
+		key := claimPathKey(path)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+
+		seen[key] = struct{}{}
+		claims = append(claims, cloneClaimPath(path))
+	}
+
+	return claims
+}
+
+func tokenClaim(token jwt.Token, path authkit.ClaimPath) (any, bool) {
+	var value any
+	if err := token.Get(path[0], &value); err != nil {
+		return nil, false
+	}
+	if len(path) == 1 {
+		return cloneClaimValue(value), true
+	}
+
+	claimMap := map[string]any{
+		path[0]: value,
+	}
+	resolved, ok := path.Lookup(claimMap)
+	if !ok {
+		return nil, false
+	}
+
+	return cloneClaimValue(resolved), true
+}
+
+func setClaim(claims map[string]any, path authkit.ClaimPath, value any) {
+	current := claims
+	for _, segment := range path[:len(path)-1] {
+		next, ok := current[segment].(map[string]any)
+		if !ok {
+			next = make(map[string]any)
+			current[segment] = next
+		}
+		current = next
+	}
+
+	current[path[len(path)-1]] = value
 }
 
 func (a *Authenticator) keySet(ctx context.Context, provider Provider) (jwk.Set, error) {

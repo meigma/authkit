@@ -53,6 +53,30 @@ type Role struct {
 	Description string
 }
 
+// ProvisioningRule describes an admin-managed rule for initial role assignment.
+type ProvisioningRule struct {
+	// ID is the stable application-owned provisioning rule identifier.
+	ID string
+
+	// DisplayName is a human-readable rule label.
+	DisplayName string
+
+	// Provider identifies the trusted identity provider this rule applies to.
+	Provider string
+
+	// ClaimPath identifies the forwarded identity claim inspected by this rule.
+	ClaimPath ClaimPath
+
+	// Values are exact claim values that satisfy this rule.
+	Values []string
+
+	// AssignRoleIDs are local role IDs assigned when this rule matches.
+	AssignRoleIDs []string
+
+	// Enabled controls whether this rule participates in runtime provisioning.
+	Enabled bool
+}
+
 // Resource describes the authorization target for an action.
 type Resource struct {
 	// Type identifies the resource class in application policy.

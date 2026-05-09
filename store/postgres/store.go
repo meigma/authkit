@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -38,6 +39,16 @@ type sqlExecutor interface {
 
 type rowQuerier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+type queryExecutor interface {
+	sqlExecutor
+	rowQuerier
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+type scanner interface {
+	Scan(dest ...any) error
 }
 
 // NewStore constructs a PostgreSQL store around pool.
@@ -202,6 +213,185 @@ func (s *Store) ResolvePrincipalActions(ctx context.Context, principalID string)
 	}
 
 	return actions, nil
+}
+
+// CreateProvisioningRule creates a provisioning rule in PostgreSQL.
+func (s *Store) CreateProvisioningRule(
+	ctx context.Context,
+	req authkit.CreateProvisioningRuleRequest,
+) (authkit.ProvisioningRule, error) {
+	if err := ctx.Err(); err != nil {
+		return authkit.ProvisioningRule{}, err
+	}
+
+	rule := provisioningRuleFromCreate(req)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return authkit.ProvisioningRule{}, fmt.Errorf("postgres: begin create provisioning rule: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	if validationErr := validateProvisioningRule(ctx, tx, rule); validationErr != nil {
+		return authkit.ProvisioningRule{}, validationErr
+	}
+	if err := insertProvisioningRule(ctx, tx, rule); err != nil {
+		return authkit.ProvisioningRule{}, err
+	}
+	if err := insertProvisioningRuleRoles(ctx, tx, rule.ID, rule.AssignRoleIDs); err != nil {
+		return authkit.ProvisioningRule{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return authkit.ProvisioningRule{}, fmt.Errorf("postgres: commit create provisioning rule: %w", err)
+	}
+
+	return cloneProvisioningRule(rule), nil
+}
+
+// UpdateProvisioningRule replaces a provisioning rule in PostgreSQL.
+func (s *Store) UpdateProvisioningRule(
+	ctx context.Context,
+	req authkit.UpdateProvisioningRuleRequest,
+) (authkit.ProvisioningRule, error) {
+	if err := ctx.Err(); err != nil {
+		return authkit.ProvisioningRule{}, err
+	}
+
+	rule := provisioningRuleFromUpdate(req)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return authkit.ProvisioningRule{}, fmt.Errorf("postgres: begin update provisioning rule: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	exists, err := provisioningRuleExists(ctx, tx, rule.ID)
+	if err != nil {
+		return authkit.ProvisioningRule{}, err
+	}
+	if !exists {
+		return authkit.ProvisioningRule{}, authkit.ErrProvisioningRuleNotFound
+	}
+	if validationErr := validateProvisioningRule(ctx, tx, rule); validationErr != nil {
+		return authkit.ProvisioningRule{}, validationErr
+	}
+
+	claimPath, err := encodeClaimPath(rule.ClaimPath)
+	if err != nil {
+		return authkit.ProvisioningRule{}, err
+	}
+	tag, err := tx.Exec(
+		ctx,
+		`update authkit_provisioning_rules
+		set display_name = $2,
+			provider = $3,
+			claim_path = $4::jsonb,
+			match_values = $5,
+			enabled = $6,
+			updated_at = now()
+		where id = $1`,
+		rule.ID,
+		rule.DisplayName,
+		rule.Provider,
+		claimPath,
+		rule.Values,
+		rule.Enabled,
+	)
+	if err != nil {
+		return authkit.ProvisioningRule{}, fmt.Errorf("postgres: update provisioning rule: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return authkit.ProvisioningRule{}, authkit.ErrProvisioningRuleNotFound
+	}
+	if _, err := tx.Exec(ctx, `delete from authkit_provisioning_rule_roles where rule_id = $1`, rule.ID); err != nil {
+		return authkit.ProvisioningRule{}, fmt.Errorf("postgres: clear provisioning rule roles: %w", err)
+	}
+	if err := insertProvisioningRuleRoles(ctx, tx, rule.ID, rule.AssignRoleIDs); err != nil {
+		return authkit.ProvisioningRule{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return authkit.ProvisioningRule{}, fmt.Errorf("postgres: commit update provisioning rule: %w", err)
+	}
+
+	return cloneProvisioningRule(rule), nil
+}
+
+// DeleteProvisioningRule deletes a provisioning rule from PostgreSQL.
+func (s *Store) DeleteProvisioningRule(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if id == "" {
+		return errors.New("postgres: provisioning rule ID is required")
+	}
+
+	tag, err := s.pool.Exec(ctx, `delete from authkit_provisioning_rules where id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("postgres: delete provisioning rule: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return authkit.ErrProvisioningRuleNotFound
+	}
+
+	return nil
+}
+
+// FindProvisioningRule returns a provisioning rule by ID.
+func (s *Store) FindProvisioningRule(ctx context.Context, id string) (authkit.ProvisioningRule, error) {
+	if err := ctx.Err(); err != nil {
+		return authkit.ProvisioningRule{}, err
+	}
+	if id == "" {
+		return authkit.ProvisioningRule{}, errors.New("postgres: provisioning rule ID is required")
+	}
+
+	rule, err := findProvisioningRule(ctx, s.pool, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return authkit.ProvisioningRule{}, authkit.ErrProvisioningRuleNotFound
+	}
+	if err != nil {
+		return authkit.ProvisioningRule{}, err
+	}
+
+	return rule, nil
+}
+
+// ListProvisioningRules returns all provisioning rules.
+func (s *Store) ListProvisioningRules(ctx context.Context) ([]authkit.ProvisioningRule, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.pool.Query(
+		ctx,
+		`select r.id, r.display_name, r.provider, r.claim_path::text, r.match_values, r.enabled,
+			coalesce(array_agg(rr.role_id order by rr.role_id)
+				filter (where rr.role_id is not null), '{}'::text[]) as role_ids
+		from authkit_provisioning_rules as r
+		left join authkit_provisioning_rule_roles as rr on rr.rule_id = r.id
+		group by r.id
+		order by r.id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: list provisioning rules: %w", err)
+	}
+	defer rows.Close()
+
+	var rules []authkit.ProvisioningRule
+	for rows.Next() {
+		rule, scanErr := scanProvisioningRule(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		rules = append(rules, rule)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: read provisioning rules: %w", err)
+	}
+
+	return rules, nil
 }
 
 func createPrincipal(
@@ -407,6 +597,9 @@ func (s *Store) ProvisionIdentity(
 	); err != nil {
 		return s.handleProvisionIdentityLinkError(ctx, tx, req.Identity, err)
 	}
+	if err := assignInitialRoles(ctx, tx, principal.ID, req.InitialRoleIDs); err != nil {
+		return authkit.ProvisionIdentityResult{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return authkit.ProvisionIdentityResult{}, fmt.Errorf("postgres: commit provision identity: %w", err)
 	}
@@ -552,20 +745,26 @@ func (s *Store) TrustProvider(ctx context.Context, provider oidc.Provider) (oidc
 	if signingAlgorithms == nil {
 		signingAlgorithms = []string{}
 	}
+	forwardedClaims, err := encodeClaimPaths(trusted.ForwardedClaims)
+	if err != nil {
+		return oidc.Provider{}, err
+	}
 	if _, err := s.pool.Exec(
 		ctx,
 		`insert into authkit_oidc_providers
-			(issuer, jwks_url, audiences, supported_signing_algorithms)
-		values ($1, $2, $3, $4)
+			(issuer, jwks_url, audiences, supported_signing_algorithms, forwarded_claims)
+		values ($1, $2, $3, $4, $5::jsonb)
 		on conflict (issuer) do update set
 			jwks_url = excluded.jwks_url,
 			audiences = excluded.audiences,
 			supported_signing_algorithms = excluded.supported_signing_algorithms,
+			forwarded_claims = excluded.forwarded_claims,
 			updated_at = now()`,
 		trusted.Issuer,
 		trusted.JWKSURL,
 		trusted.Audiences,
 		signingAlgorithms,
+		forwardedClaims,
 	); err != nil {
 		return oidc.Provider{}, fmt.Errorf("postgres: trust OIDC provider: %w", err)
 	}
@@ -580,9 +779,11 @@ func (s *Store) FindProvider(ctx context.Context, issuer string) (oidc.Provider,
 	}
 
 	var provider oidc.Provider
+	var forwardedClaims string
 	err := s.pool.QueryRow(
 		ctx,
-		`select issuer, audiences, jwks_url, supported_signing_algorithms
+		`select issuer, audiences, jwks_url, supported_signing_algorithms,
+			coalesce(forwarded_claims::text, '[]')
 		from authkit_oidc_providers
 		where issuer = $1`,
 		issuer,
@@ -591,12 +792,17 @@ func (s *Store) FindProvider(ctx context.Context, issuer string) (oidc.Provider,
 		&provider.Audiences,
 		&provider.JWKSURL,
 		&provider.SupportedSigningAlgorithms,
+		&forwardedClaims,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return oidc.Provider{}, oidc.ErrProviderNotFound
 	}
 	if err != nil {
 		return oidc.Provider{}, fmt.Errorf("postgres: find OIDC provider: %w", err)
+	}
+	provider.ForwardedClaims, err = decodeClaimPaths(forwardedClaims)
+	if err != nil {
+		return oidc.Provider{}, err
 	}
 	if err := provider.Validate(); err != nil {
 		return oidc.Provider{}, fmt.Errorf("postgres: invalid OIDC provider %q: %w", issuer, err)
@@ -683,6 +889,215 @@ func findProvisionedIdentity(
 	}, nil
 }
 
+func validateProvisioningRule(ctx context.Context, query queryExecutor, rule authkit.ProvisioningRule) error {
+	if rule.ID == "" {
+		return errors.New("postgres: provisioning rule ID is required")
+	}
+	if rule.Provider == "" {
+		return errors.New("postgres: provisioning rule provider is required")
+	}
+	if !rule.ClaimPath.Valid() {
+		return errors.New("postgres: provisioning rule claim path is required")
+	}
+	if err := validateRequiredStrings("provisioning rule value", rule.Values); err != nil {
+		return fmt.Errorf("postgres: %w", err)
+	}
+	if err := validateRequiredStrings("provisioning rule role ID", rule.AssignRoleIDs); err != nil {
+		return fmt.Errorf("postgres: %w", err)
+	}
+
+	provider, err := findTrustedProvider(ctx, query, rule.Provider)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("postgres: provider %q is not trusted", rule.Provider)
+	}
+	if err != nil {
+		return err
+	}
+	if !providerForwardsClaim(provider, rule.ClaimPath) {
+		return fmt.Errorf("postgres: provider %q does not forward claim path", rule.Provider)
+	}
+
+	var roleCount int
+	if err := query.QueryRow(
+		ctx,
+		`select count(*) from authkit_roles where id = any($1)`,
+		rule.AssignRoleIDs,
+	).Scan(&roleCount); err != nil {
+		return fmt.Errorf("postgres: validate provisioning rule roles: %w", err)
+	}
+	if roleCount != len(rule.AssignRoleIDs) {
+		return errors.New("postgres: provisioning rule references missing role")
+	}
+
+	return nil
+}
+
+func provisioningRuleExists(ctx context.Context, query rowQuerier, id string) (bool, error) {
+	var exists bool
+	if err := query.QueryRow(
+		ctx,
+		`select exists(select 1 from authkit_provisioning_rules where id = $1)`,
+		id,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("postgres: find provisioning rule: %w", err)
+	}
+
+	return exists, nil
+}
+
+func insertProvisioningRule(ctx context.Context, exec sqlExecutor, rule authkit.ProvisioningRule) error {
+	claimPath, err := encodeClaimPath(rule.ClaimPath)
+	if err != nil {
+		return err
+	}
+	if _, err := exec.Exec(
+		ctx,
+		`insert into authkit_provisioning_rules
+			(id, display_name, provider, claim_path, match_values, enabled)
+		values ($1, $2, $3, $4::jsonb, $5, $6)`,
+		rule.ID,
+		rule.DisplayName,
+		rule.Provider,
+		claimPath,
+		rule.Values,
+		rule.Enabled,
+	); err != nil {
+		if isPostgresCode(err, uniqueViolation) {
+			return fmt.Errorf("postgres: provisioning rule %q already exists", rule.ID)
+		}
+
+		return fmt.Errorf("postgres: create provisioning rule: %w", err)
+	}
+
+	return nil
+}
+
+func insertProvisioningRuleRoles(
+	ctx context.Context,
+	exec sqlExecutor,
+	ruleID string,
+	roleIDs []string,
+) error {
+	if len(roleIDs) == 0 {
+		return nil
+	}
+	if _, err := exec.Exec(
+		ctx,
+		`insert into authkit_provisioning_rule_roles (rule_id, role_id)
+		select $1, unnest($2::text[])
+		on conflict (rule_id, role_id) do nothing`,
+		ruleID,
+		roleIDs,
+	); err != nil {
+		return fmt.Errorf("postgres: assign provisioning rule roles: %w", err)
+	}
+
+	return nil
+}
+
+func findProvisioningRule(
+	ctx context.Context,
+	query rowQuerier,
+	id string,
+) (authkit.ProvisioningRule, error) {
+	rule, err := scanProvisioningRule(query.QueryRow(
+		ctx,
+		`select r.id, r.display_name, r.provider, r.claim_path::text, r.match_values, r.enabled,
+			coalesce(array_agg(rr.role_id order by rr.role_id)
+				filter (where rr.role_id is not null), '{}'::text[]) as role_ids
+		from authkit_provisioning_rules as r
+		left join authkit_provisioning_rule_roles as rr on rr.rule_id = r.id
+		where r.id = $1
+		group by r.id`,
+		id,
+	))
+	if err != nil {
+		return authkit.ProvisioningRule{}, err
+	}
+
+	return rule, nil
+}
+
+func scanProvisioningRule(row scanner) (authkit.ProvisioningRule, error) {
+	var rule authkit.ProvisioningRule
+	var claimPath string
+	if err := row.Scan(
+		&rule.ID,
+		&rule.DisplayName,
+		&rule.Provider,
+		&claimPath,
+		&rule.Values,
+		&rule.Enabled,
+		&rule.AssignRoleIDs,
+	); err != nil {
+		return authkit.ProvisioningRule{}, err
+	}
+
+	path, err := decodeClaimPath(claimPath)
+	if err != nil {
+		return authkit.ProvisioningRule{}, err
+	}
+	rule.ClaimPath = path
+
+	return cloneProvisioningRule(rule), nil
+}
+
+func assignInitialRoles(ctx context.Context, exec sqlExecutor, principalID string, roleIDs []string) error {
+	roleIDs = uniqueStrings(roleIDs)
+	if err := validateNonEmptyStrings("initial role ID", roleIDs); err != nil {
+		return fmt.Errorf("postgres: %w", err)
+	}
+	if len(roleIDs) == 0 {
+		return nil
+	}
+
+	if _, err := exec.Exec(
+		ctx,
+		`insert into authkit_principal_roles (principal_id, role_id)
+		select $1, unnest($2::text[])
+		on conflict (principal_id, role_id) do nothing`,
+		principalID,
+		roleIDs,
+	); err != nil {
+		if isPostgresCode(err, foreignKeyViolation) {
+			return errors.New("postgres: initial role does not exist")
+		}
+
+		return fmt.Errorf("postgres: assign initial roles: %w", err)
+	}
+
+	return nil
+}
+
+func findTrustedProvider(ctx context.Context, query rowQuerier, issuer string) (oidc.Provider, error) {
+	var provider oidc.Provider
+	var forwardedClaims string
+	err := query.QueryRow(
+		ctx,
+		`select issuer, audiences, jwks_url, supported_signing_algorithms,
+			coalesce(forwarded_claims::text, '[]')
+		from authkit_oidc_providers
+		where issuer = $1`,
+		issuer,
+	).Scan(
+		&provider.Issuer,
+		&provider.Audiences,
+		&provider.JWKSURL,
+		&provider.SupportedSigningAlgorithms,
+		&forwardedClaims,
+	)
+	if err != nil {
+		return oidc.Provider{}, err
+	}
+
+	provider.ForwardedClaims, err = decodeClaimPaths(forwardedClaims)
+	if err != nil {
+		return oidc.Provider{}, err
+	}
+
+	return cloneProvider(provider), nil
+}
+
 func (s *Store) resolveIdentityLinkConflict(
 	ctx context.Context,
 	req authkit.LinkIdentityRequest,
@@ -755,6 +1170,53 @@ func encodeAttributes(attrs map[string]any) (string, error) {
 	return string(encoded), nil
 }
 
+func encodeClaimPaths(paths []authkit.ClaimPath) (string, error) {
+	if len(paths) == 0 {
+		return "[]", nil
+	}
+
+	encoded, err := json.Marshal(paths)
+	if err != nil {
+		return "", fmt.Errorf("postgres: encode claim paths: %w", err)
+	}
+
+	return string(encoded), nil
+}
+
+func decodeClaimPaths(encoded string) ([]authkit.ClaimPath, error) {
+	if encoded == "" || encoded == "null" {
+		return nil, nil
+	}
+
+	var paths []authkit.ClaimPath
+	if err := json.Unmarshal([]byte(encoded), &paths); err != nil {
+		return nil, fmt.Errorf("postgres: decode claim paths: %w", err)
+	}
+	if len(paths) == 0 {
+		return nil, nil
+	}
+
+	return cloneClaimPaths(paths), nil
+}
+
+func encodeClaimPath(path authkit.ClaimPath) (string, error) {
+	encoded, err := json.Marshal(path)
+	if err != nil {
+		return "", fmt.Errorf("postgres: encode claim path: %w", err)
+	}
+
+	return string(encoded), nil
+}
+
+func decodeClaimPath(encoded string) (authkit.ClaimPath, error) {
+	var path authkit.ClaimPath
+	if err := json.Unmarshal([]byte(encoded), &path); err != nil {
+		return nil, fmt.Errorf("postgres: decode claim path: %w", err)
+	}
+
+	return cloneClaimPath(path), nil
+}
+
 func decodeAttributes(encoded string) (map[string]any, error) {
 	if encoded == "" || encoded == "null" {
 		//nolint:nilnil // Nil attributes are the normalized zero value for principals.
@@ -787,6 +1249,7 @@ func cloneAttributes(attrs map[string]any) map[string]any {
 func cloneProvider(provider oidc.Provider) oidc.Provider {
 	provider.Audiences = cloneStrings(provider.Audiences)
 	provider.SupportedSigningAlgorithms = cloneStrings(provider.SupportedSigningAlgorithms)
+	provider.ForwardedClaims = cloneClaimPaths(provider.ForwardedClaims)
 
 	return provider
 }
@@ -800,6 +1263,112 @@ func cloneStrings(values []string) []string {
 	copy(cloned, values)
 
 	return cloned
+}
+
+func cloneClaimPaths(paths []authkit.ClaimPath) []authkit.ClaimPath {
+	if len(paths) == 0 {
+		return nil
+	}
+
+	cloned := make([]authkit.ClaimPath, len(paths))
+	for i, path := range paths {
+		cloned[i] = cloneClaimPath(path)
+	}
+
+	return cloned
+}
+
+func cloneClaimPath(path authkit.ClaimPath) authkit.ClaimPath {
+	if len(path) == 0 {
+		return nil
+	}
+
+	cloned := make(authkit.ClaimPath, len(path))
+	copy(cloned, path)
+
+	return cloned
+}
+
+func providerForwardsClaim(provider oidc.Provider, path authkit.ClaimPath) bool {
+	return slices.ContainsFunc(provider.ForwardedClaims, func(candidate authkit.ClaimPath) bool {
+		return slices.Equal(candidate, path)
+	})
+}
+
+func provisioningRuleFromCreate(req authkit.CreateProvisioningRuleRequest) authkit.ProvisioningRule {
+	return normalizeProvisioningRule(authkit.ProvisioningRule{
+		ID:            req.ID,
+		DisplayName:   req.DisplayName,
+		Provider:      req.Provider,
+		ClaimPath:     cloneClaimPath(req.ClaimPath),
+		Values:        cloneStrings(req.Values),
+		AssignRoleIDs: cloneStrings(req.AssignRoleIDs),
+		Enabled:       req.Enabled,
+	})
+}
+
+func provisioningRuleFromUpdate(req authkit.UpdateProvisioningRuleRequest) authkit.ProvisioningRule {
+	return normalizeProvisioningRule(authkit.ProvisioningRule{
+		ID:            req.ID,
+		DisplayName:   req.DisplayName,
+		Provider:      req.Provider,
+		ClaimPath:     cloneClaimPath(req.ClaimPath),
+		Values:        cloneStrings(req.Values),
+		AssignRoleIDs: cloneStrings(req.AssignRoleIDs),
+		Enabled:       req.Enabled,
+	})
+}
+
+func normalizeProvisioningRule(rule authkit.ProvisioningRule) authkit.ProvisioningRule {
+	rule.Values = uniqueStrings(rule.Values)
+	rule.AssignRoleIDs = uniqueStrings(rule.AssignRoleIDs)
+
+	return rule
+}
+
+func cloneProvisioningRule(rule authkit.ProvisioningRule) authkit.ProvisioningRule {
+	rule.ClaimPath = cloneClaimPath(rule.ClaimPath)
+	rule.Values = cloneStrings(rule.Values)
+	rule.AssignRoleIDs = cloneStrings(rule.AssignRoleIDs)
+
+	return rule
+}
+
+func validateNonEmptyStrings(name string, values []string) error {
+	for i, value := range values {
+		if value == "" {
+			return fmt.Errorf("%s %d is required", name, i)
+		}
+	}
+
+	return nil
+}
+
+func validateRequiredStrings(name string, values []string) error {
+	if len(values) == 0 {
+		return fmt.Errorf("%s is required", name)
+	}
+
+	return validateNonEmptyStrings(name, values)
+}
+
+func uniqueStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	unique := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+
+	return unique
 }
 
 func timeFromTimestamptz(value pgtype.Timestamptz) *time.Time {

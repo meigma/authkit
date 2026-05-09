@@ -19,6 +19,7 @@ const (
 	concurrentProvisionAttempts = 8
 	testAction                  = "notes:read"
 	testProvider                = "oidc"
+	testProvisioningRuleID      = "engineering-readers"
 	testRoleID                  = "notes-reader"
 	testSubject                 = "user-123"
 	testDisplayName             = "Ada Lovelace"
@@ -31,6 +32,11 @@ type Store interface {
 	authkit.RoleActionGranter
 	authkit.PrincipalRoleAssigner
 	authkit.PrincipalActionResolver
+	authkit.ProvisioningRuleCreator
+	authkit.ProvisioningRuleUpdater
+	authkit.ProvisioningRuleDeleter
+	authkit.ProvisioningRuleFinder
+	authkit.ProvisioningRuleLister
 	authkit.IdentityLinker
 	authkit.IdentityProvisioner
 	authkit.PrincipalResolver
@@ -275,6 +281,145 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 		assert.Nil(t, actions)
 	})
 
+	t.Run("provisioning rules", func(t *testing.T) {
+		store := newStore(t)
+		createRole(t, store, testRoleID)
+		trustProvider(t, store, providerFixture())
+		req := provisioningRuleRequest()
+
+		rule, err := store.CreateProvisioningRule(context.Background(), req)
+		require.NoError(t, err)
+		assert.Equal(t, authkit.ProvisioningRule(req), rule)
+
+		req.Values[0] = "/changed"
+		req.AssignRoleIDs[0] = "changed"
+		rule.Values[0] = "/changed-from-returned"
+		rule.AssignRoleIDs[0] = "changed-from-returned"
+
+		found, err := store.FindProvisioningRule(context.Background(), testProvisioningRuleID)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"/engineering"}, found.Values)
+		assert.Equal(t, []string{testRoleID}, found.AssignRoleIDs)
+
+		listed, err := store.ListProvisioningRules(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, []authkit.ProvisioningRule{found}, listed)
+
+		found.Values[0] = "/changed-from-found"
+		listed[0].AssignRoleIDs[0] = "changed-from-list"
+		foundAgain, err := store.FindProvisioningRule(context.Background(), testProvisioningRuleID)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"/engineering"}, foundAgain.Values)
+		assert.Equal(t, []string{testRoleID}, foundAgain.AssignRoleIDs)
+	})
+
+	t.Run("provisioning rules can be updated and deleted", func(t *testing.T) {
+		store := newStore(t)
+		createRole(t, store, testRoleID)
+		createRole(t, store, "notes-writer")
+		trustProvider(t, store, providerFixture())
+		_, err := store.CreateProvisioningRule(context.Background(), provisioningRuleRequest())
+		require.NoError(t, err)
+
+		updated := authkit.UpdateProvisioningRuleRequest{
+			ID:            testProvisioningRuleID,
+			DisplayName:   "Platform writers",
+			Provider:      providerFixture().Issuer,
+			ClaimPath:     authkit.ClaimPath{"realm_access", "roles"},
+			Values:        []string{"writer"},
+			AssignRoleIDs: []string{"notes-writer"},
+			Enabled:       false,
+		}
+		rule, err := store.UpdateProvisioningRule(context.Background(), updated)
+		require.NoError(t, err)
+		assert.Equal(t, authkit.ProvisioningRule(updated), rule)
+
+		require.NoError(t, store.DeleteProvisioningRule(context.Background(), testProvisioningRuleID))
+		_, err = store.FindProvisioningRule(context.Background(), testProvisioningRuleID)
+		require.ErrorIs(t, err, authkit.ErrProvisioningRuleNotFound)
+		require.ErrorIs(
+			t,
+			store.DeleteProvisioningRule(context.Background(), testProvisioningRuleID),
+			authkit.ErrProvisioningRuleNotFound,
+		)
+
+		_, err = store.UpdateProvisioningRule(context.Background(), authkit.UpdateProvisioningRuleRequest{
+			ID:            testProvisioningRuleID,
+			Provider:      "https://untrusted.example",
+			ClaimPath:     authkit.ClaimPath{"missing"},
+			Values:        []string{"missing"},
+			AssignRoleIDs: []string{"missing"},
+			Enabled:       true,
+		})
+		require.ErrorIs(t, err, authkit.ErrProvisioningRuleNotFound)
+	})
+
+	t.Run("provisioning rules validate configuration", func(t *testing.T) {
+		store := newStore(t)
+		createRole(t, store, testRoleID)
+		trustProvider(t, store, providerFixture())
+
+		tests := []struct {
+			name string
+			req  authkit.CreateProvisioningRuleRequest
+		}{
+			{
+				name: "missing ID",
+				req: func() authkit.CreateProvisioningRuleRequest {
+					req := provisioningRuleRequest()
+					req.ID = ""
+
+					return req
+				}(),
+			},
+			{
+				name: "untrusted provider",
+				req: func() authkit.CreateProvisioningRuleRequest {
+					req := provisioningRuleRequest()
+					req.Provider = "https://untrusted.example"
+
+					return req
+				}(),
+			},
+			{
+				name: "claim not forwarded",
+				req: func() authkit.CreateProvisioningRuleRequest {
+					req := provisioningRuleRequest()
+					req.ClaimPath = authkit.ClaimPath{"department"}
+
+					return req
+				}(),
+			},
+			{
+				name: "missing values",
+				req: func() authkit.CreateProvisioningRuleRequest {
+					req := provisioningRuleRequest()
+					req.Values = nil
+
+					return req
+				}(),
+			},
+			{
+				name: "missing role",
+				req: func() authkit.CreateProvisioningRuleRequest {
+					req := provisioningRuleRequest()
+					req.AssignRoleIDs = []string{"missing"}
+
+					return req
+				}(),
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				rule, err := store.CreateProvisioningRule(context.Background(), tt.req)
+
+				require.Error(t, err)
+				assert.Empty(t, rule)
+			})
+		}
+	})
+
 	t.Run("principal attributes are copied", func(t *testing.T) {
 		store := newStore(t)
 		attrs := map[string]any{
@@ -492,6 +637,61 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 		assert.Equal(t, result.Principal.ID, resolved.ID)
 	})
 
+	t.Run("provision identity assigns initial roles", func(t *testing.T) {
+		store := newStore(t)
+		createRole(t, store, testRoleID)
+		require.NoError(t, store.GrantRoleAction(context.Background(), authkit.GrantRoleActionRequest{
+			RoleID: testRoleID,
+			Action: testAction,
+		}))
+		req := provisionRequest()
+		req.InitialRoleIDs = []string{testRoleID}
+
+		result, err := store.ProvisionIdentity(context.Background(), req)
+		require.NoError(t, err)
+		require.True(t, result.Created)
+
+		actions, err := store.ResolvePrincipalActions(context.Background(), result.Principal.ID)
+		require.NoError(t, err)
+		assert.Equal(t, []string{testAction}, actions)
+	})
+
+	t.Run("provision identity fails when initial role is missing", func(t *testing.T) {
+		store := newStore(t)
+		req := provisionRequest()
+		req.InitialRoleIDs = []string{"missing"}
+
+		result, err := store.ProvisionIdentity(context.Background(), req)
+		require.Error(t, err)
+		assert.Empty(t, result)
+
+		resolved, err := store.ResolveIdentity(context.Background(), req.Identity)
+		require.ErrorIs(t, err, authkit.ErrUnresolvedIdentity)
+		assert.Nil(t, resolved)
+	})
+
+	t.Run("provision identity does not assign roles to existing links", func(t *testing.T) {
+		store := newStore(t)
+		first, err := store.ProvisionIdentity(context.Background(), provisionRequest())
+		require.NoError(t, err)
+		require.True(t, first.Created)
+		createRole(t, store, testRoleID)
+		require.NoError(t, store.GrantRoleAction(context.Background(), authkit.GrantRoleActionRequest{
+			RoleID: testRoleID,
+			Action: testAction,
+		}))
+		req := provisionRequest()
+		req.InitialRoleIDs = []string{testRoleID}
+
+		second, err := store.ProvisionIdentity(context.Background(), req)
+		require.NoError(t, err)
+		assert.False(t, second.Created)
+
+		actions, err := store.ResolvePrincipalActions(context.Background(), first.Principal.ID)
+		require.NoError(t, err)
+		assert.Nil(t, actions)
+	})
+
 	t.Run("provision identity returns existing link without updating principal", func(t *testing.T) {
 		store := newStore(t)
 		first, err := store.ProvisionIdentity(context.Background(), provisionRequest())
@@ -633,8 +833,10 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 		assert.Equal(t, want, trusted)
 
 		provider.Audiences[0] = "changed before find"
+		provider.ForwardedClaims[0][0] = "changed-before-find"
 		trusted.Audiences[0] = "changed from returned provider"
 		trusted.SupportedSigningAlgorithms[0] = "ES256"
+		trusted.ForwardedClaims[0][0] = "changed-from-returned-provider"
 
 		found, err := store.FindProvider(context.Background(), want.Issuer)
 		require.NoError(t, err)
@@ -642,6 +844,7 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 
 		found.Audiences[0] = "changed from found provider"
 		found.SupportedSigningAlgorithms[0] = "ES256"
+		found.ForwardedClaims[0][0] = "changed-from-found-provider"
 		foundAgain, err := store.FindProvider(context.Background(), want.Issuer)
 		require.NoError(t, err)
 		assert.Equal(t, want, foundAgain)
@@ -658,6 +861,7 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 			Audiences:                  []string{"updated-api"},
 			JWKSURL:                    "https://issuer.example/updated-jwks.json",
 			SupportedSigningAlgorithms: []string{"RS512"},
+			ForwardedClaims:            []authkit.ClaimPath{{"email"}},
 		}
 		trusted, err := store.TrustProvider(context.Background(), updated)
 		require.NoError(t, err)
@@ -781,6 +985,46 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 				name: "trust provider",
 				run: func() error {
 					_, runErr := store.TrustProvider(ctx, providerFixture())
+
+					return runErr
+				},
+			},
+			{
+				name: "create provisioning rule",
+				run: func() error {
+					_, runErr := store.CreateProvisioningRule(ctx, provisioningRuleRequest())
+
+					return runErr
+				},
+			},
+			{
+				name: "update provisioning rule",
+				run: func() error {
+					_, runErr := store.UpdateProvisioningRule(ctx, authkit.UpdateProvisioningRuleRequest{
+						ID: testProvisioningRuleID,
+					})
+
+					return runErr
+				},
+			},
+			{
+				name: "delete provisioning rule",
+				run: func() error {
+					return store.DeleteProvisioningRule(ctx, testProvisioningRuleID)
+				},
+			},
+			{
+				name: "find provisioning rule",
+				run: func() error {
+					_, runErr := store.FindProvisioningRule(ctx, testProvisioningRuleID)
+
+					return runErr
+				},
+			},
+			{
+				name: "list provisioning rules",
+				run: func() error {
+					_, runErr := store.ListProvisioningRules(ctx)
 
 					return runErr
 				},
@@ -931,6 +1175,15 @@ func createRole(t *testing.T, store Store, roleID string) authkit.Role {
 	return role
 }
 
+func trustProvider(t *testing.T, store Store, provider oidc.Provider) oidc.Provider {
+	t.Helper()
+
+	trusted, err := store.TrustProvider(context.Background(), provider)
+	require.NoError(t, err)
+
+	return trusted
+}
+
 func roleRequest() authkit.CreateRoleRequest {
 	return authkit.CreateRoleRequest{
 		ID:          testRoleID,
@@ -945,6 +1198,22 @@ func providerFixture() oidc.Provider {
 		Audiences:                  []string{"notes-api"},
 		JWKSURL:                    "https://issuer.example/.well-known/jwks.json",
 		SupportedSigningAlgorithms: []string{"RS256"},
+		ForwardedClaims: []authkit.ClaimPath{
+			{"groups"},
+			{"realm_access", "roles"},
+		},
+	}
+}
+
+func provisioningRuleRequest() authkit.CreateProvisioningRuleRequest {
+	return authkit.CreateProvisioningRuleRequest{
+		ID:            testProvisioningRuleID,
+		DisplayName:   "Engineering readers",
+		Provider:      providerFixture().Issuer,
+		ClaimPath:     authkit.ClaimPath{"groups"},
+		Values:        []string{"/engineering"},
+		AssignRoleIDs: []string{testRoleID},
+		Enabled:       true,
 	}
 }
 

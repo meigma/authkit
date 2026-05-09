@@ -8,6 +8,7 @@
 // and caller-supplied Facts. The apikey and oidc packages are concrete
 // authenticators for opaque API tokens and OIDC-issued JWT bearer tokens. The
 // provisioning package can wrap a resolver to create principals for
-// caller-approved identities. The roleauth package authorizes from local
-// admin-managed roles and effective action grants.
+// caller-approved identities and assign initial local roles from admin-managed
+// provisioning rules. The roleauth package authorizes from local admin-managed
+// roles and effective action grants.
 package authkit

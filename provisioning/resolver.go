@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/meigma/authkit"
 )
@@ -24,6 +25,9 @@ type ResolverOptions struct {
 
 	// Factory maps unresolved identities to principal creation requests.
 	Factory PrincipalFactory
+
+	// RuleSource lists provisioning rules used for initial role assignment.
+	RuleSource authkit.ProvisioningRuleLister
 }
 
 // Resolver resolves linked identities and provisions allowed unresolved identities.
@@ -31,6 +35,7 @@ type Resolver struct {
 	resolver    authkit.PrincipalResolver
 	provisioner authkit.IdentityProvisioner
 	factory     PrincipalFactory
+	ruleSource  authkit.ProvisioningRuleLister
 }
 
 // NewResolver constructs an auto-provisioning principal resolver.
@@ -49,6 +54,7 @@ func NewResolver(opts ResolverOptions) (*Resolver, error) {
 		resolver:    opts.Resolver,
 		provisioner: opts.Provisioner,
 		factory:     opts.Factory,
+		ruleSource:  opts.RuleSource,
 	}, nil
 }
 
@@ -73,13 +79,85 @@ func (r *Resolver) ResolveIdentity(
 		return nil, err
 	}
 
+	roleIDs, err := r.initialRoleIDs(ctx, identity)
+	if err != nil {
+		return nil, err
+	}
+
 	result, provisionErr := r.provisioner.ProvisionIdentity(ctx, authkit.ProvisionIdentityRequest{
-		Identity:  identity,
-		Principal: req,
+		Identity:       identity,
+		Principal:      req,
+		InitialRoleIDs: roleIDs,
 	})
 	if provisionErr != nil {
 		return nil, fmt.Errorf("provisioning: provision identity: %w", provisionErr)
 	}
 
 	return &result.Principal, nil
+}
+
+func (r *Resolver) initialRoleIDs(ctx context.Context, identity authkit.Identity) ([]string, error) {
+	if r.ruleSource == nil {
+		return nil, nil
+	}
+
+	rules, err := r.ruleSource.ListProvisioningRules(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("provisioning: list provisioning rules: %w", err)
+	}
+
+	return MatchRules(identity, rules), nil
+}
+
+// MatchRules returns local role IDs assigned by provisioning rules for identity.
+func MatchRules(identity authkit.Identity, rules []authkit.ProvisioningRule) []string {
+	if len(rules) == 0 {
+		return nil
+	}
+
+	var roleIDs []string
+	seen := map[string]struct{}{}
+	for _, rule := range rules {
+		if !rule.Enabled || rule.Provider != identity.Provider {
+			continue
+		}
+
+		value, ok := rule.ClaimPath.Lookup(identity.Claims)
+		if !ok || !claimMatches(value, rule.Values) {
+			continue
+		}
+
+		for _, roleID := range rule.AssignRoleIDs {
+			if roleID == "" {
+				continue
+			}
+			if _, ok := seen[roleID]; ok {
+				continue
+			}
+
+			seen[roleID] = struct{}{}
+			roleIDs = append(roleIDs, roleID)
+		}
+	}
+
+	return roleIDs
+}
+
+func claimMatches(value any, accepted []string) bool {
+	switch typed := value.(type) {
+	case string:
+		return slices.Contains(accepted, typed)
+	case []string:
+		return slices.ContainsFunc(typed, func(item string) bool {
+			return slices.Contains(accepted, item)
+		})
+	case []any:
+		return slices.ContainsFunc(typed, func(item any) bool {
+			itemString, ok := item.(string)
+
+			return ok && slices.Contains(accepted, itemString)
+		})
+	default:
+		return false
+	}
 }

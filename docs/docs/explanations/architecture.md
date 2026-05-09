@@ -36,6 +36,11 @@ roles through application-owned setup paths.
 checking whether it contains the requested action. It does not derive
 permissions from external identity metadata, provider groups, or token claims.
 
+Provisioning rules can assign local roles when an external identity is first
+auto-provisioned. Those rules remain local admin policy: they match only
+verified claims explicitly forwarded by trusted provider configuration, and
+they do not continuously sync external groups into local role membership.
+
 ## Authorization Facts
 
 `authkit.Facts` is a generic decision-time context bag. Applications supply
@@ -96,10 +101,10 @@ first tries normal identity resolution. If the identity is unresolved, it calls
 application-owned policy code to decide whether that verified identity may
 create a principal.
 
-Provisioning creates and links a principal only. It does not grant local roles,
-grant Casbin policy, or derive authorization from JWT claims. Applications must
-explicitly forward the claims they need for display or attributes, and they
-remain responsible for permission grants.
+Provisioning always starts with an application-owned approval point. When a
+rule source is configured, enabled provisioning rules may add initial local
+role assignments during the same create-and-link operation. Missing claims do
+not match rules, and existing principals are not re-synced.
 
 ## HTTP Runtime
 

@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/lestrrat-go/jwx/v3/jwa"
+
+	"github.com/meigma/authkit"
 )
 
 const (
@@ -32,6 +34,9 @@ type Provider struct {
 
 	// SupportedSigningAlgorithms limits acceptable JWT signing algorithms.
 	SupportedSigningAlgorithms []string
+
+	// ForwardedClaims selects verified JWT claims copied into authkit.Identity.Claims.
+	ForwardedClaims []authkit.ClaimPath
 }
 
 // Validate reports configuration errors that prevent provider trust.
@@ -52,6 +57,11 @@ func (p Provider) Validate() error {
 	}
 	if _, err := p.signingAlgorithms(); err != nil {
 		return err
+	}
+	for i, path := range p.ForwardedClaims {
+		if !path.Valid() {
+			return fmt.Errorf("oidc: provider forwarded claim %d is invalid", i)
+		}
 	}
 
 	return nil

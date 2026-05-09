@@ -32,6 +32,21 @@ type Options struct {
 	// PrincipalRoleAssigner assigns principals to roles.
 	PrincipalRoleAssigner authkit.PrincipalRoleAssigner
 
+	// ProvisioningRuleCreator creates provisioning rules.
+	ProvisioningRuleCreator authkit.ProvisioningRuleCreator
+
+	// ProvisioningRuleUpdater updates provisioning rules.
+	ProvisioningRuleUpdater authkit.ProvisioningRuleUpdater
+
+	// ProvisioningRuleDeleter deletes provisioning rules.
+	ProvisioningRuleDeleter authkit.ProvisioningRuleDeleter
+
+	// ProvisioningRuleFinder finds provisioning rules.
+	ProvisioningRuleFinder authkit.ProvisioningRuleFinder
+
+	// ProvisioningRuleLister lists provisioning rules.
+	ProvisioningRuleLister authkit.ProvisioningRuleLister
+
 	// IdentityLinker links external identities to internal principals.
 	IdentityLinker authkit.IdentityLinker
 
@@ -41,12 +56,17 @@ type Options struct {
 
 // Service composes common authkit management operations.
 type Service struct {
-	principalCreator      authkit.PrincipalCreator
-	roleCreator           authkit.RoleCreator
-	roleActionGranter     authkit.RoleActionGranter
-	principalRoleAssigner authkit.PrincipalRoleAssigner
-	identityLinker        authkit.IdentityLinker
-	apiTokens             APITokens
+	principalCreator        authkit.PrincipalCreator
+	roleCreator             authkit.RoleCreator
+	roleActionGranter       authkit.RoleActionGranter
+	principalRoleAssigner   authkit.PrincipalRoleAssigner
+	provisioningRuleCreator authkit.ProvisioningRuleCreator
+	provisioningRuleUpdater authkit.ProvisioningRuleUpdater
+	provisioningRuleDeleter authkit.ProvisioningRuleDeleter
+	provisioningRuleFinder  authkit.ProvisioningRuleFinder
+	provisioningRuleLister  authkit.ProvisioningRuleLister
+	identityLinker          authkit.IdentityLinker
+	apiTokens               APITokens
 }
 
 // NewService constructs a management service from opts.
@@ -62,12 +82,17 @@ func NewService(opts Options) (*Service, error) {
 	}
 
 	return &Service{
-		principalCreator:      opts.PrincipalCreator,
-		roleCreator:           opts.RoleCreator,
-		roleActionGranter:     opts.RoleActionGranter,
-		principalRoleAssigner: opts.PrincipalRoleAssigner,
-		identityLinker:        opts.IdentityLinker,
-		apiTokens:             opts.APITokens,
+		principalCreator:        opts.PrincipalCreator,
+		roleCreator:             opts.RoleCreator,
+		roleActionGranter:       opts.RoleActionGranter,
+		principalRoleAssigner:   opts.PrincipalRoleAssigner,
+		provisioningRuleCreator: opts.ProvisioningRuleCreator,
+		provisioningRuleUpdater: opts.ProvisioningRuleUpdater,
+		provisioningRuleDeleter: opts.ProvisioningRuleDeleter,
+		provisioningRuleFinder:  opts.ProvisioningRuleFinder,
+		provisioningRuleLister:  opts.ProvisioningRuleLister,
+		identityLinker:          opts.IdentityLinker,
+		apiTokens:               opts.APITokens,
 	}, nil
 }
 
@@ -125,6 +150,81 @@ func (s *Service) AssignPrincipalRole(ctx context.Context, req authkit.AssignPri
 	}
 
 	return nil
+}
+
+// CreateProvisioningRule creates a provisioning rule.
+func (s *Service) CreateProvisioningRule(
+	ctx context.Context,
+	req authkit.CreateProvisioningRuleRequest,
+) (authkit.ProvisioningRule, error) {
+	if s.provisioningRuleCreator == nil {
+		return authkit.ProvisioningRule{}, errors.New("management: provisioning rule creator is required")
+	}
+
+	rule, err := s.provisioningRuleCreator.CreateProvisioningRule(ctx, req)
+	if err != nil {
+		return authkit.ProvisioningRule{}, fmt.Errorf("management: create provisioning rule: %w", err)
+	}
+
+	return rule, nil
+}
+
+// UpdateProvisioningRule updates a provisioning rule.
+func (s *Service) UpdateProvisioningRule(
+	ctx context.Context,
+	req authkit.UpdateProvisioningRuleRequest,
+) (authkit.ProvisioningRule, error) {
+	if s.provisioningRuleUpdater == nil {
+		return authkit.ProvisioningRule{}, errors.New("management: provisioning rule updater is required")
+	}
+
+	rule, err := s.provisioningRuleUpdater.UpdateProvisioningRule(ctx, req)
+	if err != nil {
+		return authkit.ProvisioningRule{}, fmt.Errorf("management: update provisioning rule: %w", err)
+	}
+
+	return rule, nil
+}
+
+// DeleteProvisioningRule deletes a provisioning rule.
+func (s *Service) DeleteProvisioningRule(ctx context.Context, id string) error {
+	if s.provisioningRuleDeleter == nil {
+		return errors.New("management: provisioning rule deleter is required")
+	}
+
+	if err := s.provisioningRuleDeleter.DeleteProvisioningRule(ctx, id); err != nil {
+		return fmt.Errorf("management: delete provisioning rule: %w", err)
+	}
+
+	return nil
+}
+
+// FindProvisioningRule returns a provisioning rule by ID.
+func (s *Service) FindProvisioningRule(ctx context.Context, id string) (authkit.ProvisioningRule, error) {
+	if s.provisioningRuleFinder == nil {
+		return authkit.ProvisioningRule{}, errors.New("management: provisioning rule finder is required")
+	}
+
+	rule, err := s.provisioningRuleFinder.FindProvisioningRule(ctx, id)
+	if err != nil {
+		return authkit.ProvisioningRule{}, fmt.Errorf("management: find provisioning rule: %w", err)
+	}
+
+	return rule, nil
+}
+
+// ListProvisioningRules returns provisioning rules.
+func (s *Service) ListProvisioningRules(ctx context.Context) ([]authkit.ProvisioningRule, error) {
+	if s.provisioningRuleLister == nil {
+		return nil, errors.New("management: provisioning rule lister is required")
+	}
+
+	rules, err := s.provisioningRuleLister.ListProvisioningRules(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("management: list provisioning rules: %w", err)
+	}
+
+	return rules, nil
 }
 
 // LinkIdentity links an external identity to an internal principal.
