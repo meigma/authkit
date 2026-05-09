@@ -8,7 +8,7 @@ description: Use compose.NewHTTP to wire authkit for a net/http API service.
 Use `compose.NewHTTP` when you want the standard `net/http` path with less
 boilerplate. The helper builds authenticators, an `authkit.Pipeline`, and
 `httpauth.Middleware`; your application still owns storage, provider trust,
-Casbin policy setup, and management workflows.
+local role or Casbin policy setup, and management workflows.
 
 ## Create The Stores And Services
 
@@ -21,9 +21,12 @@ if err != nil {
 }
 
 managementService, err := management.NewService(management.Options{
-	PrincipalCreator: store,
-	IdentityLinker:   store,
-	APITokens:        tokenService,
+	PrincipalCreator:      store,
+	RoleCreator:           store,
+	RoleActionGranter:     store,
+	PrincipalRoleAssigner: store,
+	IdentityLinker:        store,
+	APITokens:             tokenService,
 })
 if err != nil {
 	return err
@@ -50,8 +53,18 @@ if err != nil {
 
 ## Configure Authorization
 
-Applications own the Casbin model and policy. Adapt an enforcer with the Casbin
-adapter:
+For action-only local role checks, grant actions to roles and adapt the store
+with `roleauth`:
+
+```go
+authorizer, err := roleauth.NewAuthorizer(store)
+if err != nil {
+	return err
+}
+```
+
+For resource-aware policy, applications can own the Casbin model and policy and
+adapt an enforcer with the Casbin adapter:
 
 ```go
 authorizer, err := authkitcasbin.NewAuthorizer(enforcer)

@@ -41,6 +41,18 @@ const (
 	PrincipalKindService PrincipalKind = "service"
 )
 
+// Role describes an admin-managed local role.
+type Role struct {
+	// ID is the stable application-owned role identifier.
+	ID string
+
+	// DisplayName is a human-readable role label.
+	DisplayName string
+
+	// Description optionally explains the role's intended use.
+	Description string
+}
+
 // Resource describes the authorization target for an action.
 type Resource struct {
 	// Type identifies the resource class in application policy.

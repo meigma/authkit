@@ -97,6 +97,9 @@ func TestMigrateCreatesSchema(t *testing.T) {
 		"authkit_external_identities",
 		"authkit_api_tokens",
 		"authkit_oidc_providers",
+		"authkit_roles",
+		"authkit_role_actions",
+		"authkit_principal_roles",
 	} {
 		t.Run(table, func(t *testing.T) {
 			var exists bool
@@ -115,10 +118,10 @@ func TestMigrateCreatesSchema(t *testing.T) {
 	}
 
 	var migrationRows int
-	err := pool.QueryRow(ctx, `select count(*) from authkit_schema_migrations where version in (1, 2)`).
+	err := pool.QueryRow(ctx, `select count(*) from authkit_schema_migrations where version in (1, 2, 3)`).
 		Scan(&migrationRows)
 	require.NoError(t, err)
-	assert.Equal(t, 2, migrationRows)
+	assert.Equal(t, 3, migrationRows)
 }
 
 func TestMigrateConcurrentCalls(t *testing.T) {
@@ -143,10 +146,10 @@ func TestMigrateConcurrentCalls(t *testing.T) {
 	}
 
 	var migrationRows int
-	err := pool.QueryRow(ctx, `select count(*) from authkit_schema_migrations where version in (1, 2)`).
+	err := pool.QueryRow(ctx, `select count(*) from authkit_schema_migrations where version in (1, 2, 3)`).
 		Scan(&migrationRows)
 	require.NoError(t, err)
-	assert.Equal(t, 2, migrationRows)
+	assert.Equal(t, 3, migrationRows)
 }
 
 func newPostgresPool(t *testing.T) *pgxpool.Pool {
@@ -185,6 +188,9 @@ func resetStore(t *testing.T, pool *pgxpool.Pool) {
 		context.Background(),
 		`truncate table
 			authkit_oidc_providers,
+			authkit_principal_roles,
+			authkit_role_actions,
+			authkit_roles,
 			authkit_api_tokens,
 			authkit_external_identities,
 			authkit_principals

@@ -48,8 +48,9 @@ Decides whether an `authkit.AuthorizationCheck` is allowed. The check contains
 the resolved principal, action, resource, and caller-supplied decision facts.
 Implement this for a policy engine other than Casbin.
 
-Provided adapter:
+Provided adapters:
 
+- `roleauth.NewAuthorizer`
 - `casbin.NewAuthorizer`
 
 ## Management Ports
@@ -57,6 +58,22 @@ Provided adapter:
 ### `authkit.PrincipalCreator`
 
 Creates internal principals.
+
+### `authkit.RoleCreator`
+
+Creates admin-managed local roles.
+
+### `authkit.RoleActionGranter`
+
+Grants authorization action strings to local roles.
+
+### `authkit.PrincipalRoleAssigner`
+
+Assigns principals to local roles.
+
+### `authkit.PrincipalActionResolver`
+
+Resolves a principal's effective action strings from local role membership.
 
 ### `authkit.IdentityLinker`
 
@@ -117,6 +134,12 @@ These helpers do not inject facts automatically.
 `authkit.AuthorizationCheck` to Casbin request values. Use it when an
 application model expects facts, a different subject, object, action, or
 attribute shape.
+
+## Local Role Adapter
+
+`roleauth.NewAuthorizer` checks whether the resolved principal has the requested
+`authkit.AuthorizationCheck.Action` through admin-managed local role grants. It
+does not inspect resource metadata, facts, or external provider claims.
 
 ## Composition Helper
 

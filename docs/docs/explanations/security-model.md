@@ -46,8 +46,8 @@ factory that decides which identities may create principals and how forwarded
 claims become display names or attributes.
 
 Provisioning does not grant permissions. A newly provisioned principal still
-needs application-owned authorization policy before it can access protected
-resources.
+needs local role assignment, Casbin policy, or another application-owned
+authorization policy before it can access protected resources.
 
 ## Fail-Closed Behavior
 
@@ -69,8 +69,12 @@ Facts are decision-time context. authkit does not automatically inject HTTP
 request data, token claims, or provider-specific groups into authorization
 facts. Applications choose the facts they trust and pass them explicitly.
 
+Local roles are admin-managed and grant action strings to principals through
+role membership. The `roleauth` adapter checks only the principal's effective
+action set; it does not inspect resources, facts, or provider metadata.
+
 The Casbin adapter uses the principal ID as the default subject. Applications
-own Casbin models, policy, role design, fact projection, and policy storage.
+own Casbin models, policy design, fact projection, and policy storage.
 
 ## Non-Goals
 

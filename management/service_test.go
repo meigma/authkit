@@ -83,6 +83,167 @@ func TestServiceCreatePrincipal(t *testing.T) {
 	assert.Equal(t, []authkit.CreatePrincipalRequest{req}, creator.requests)
 }
 
+func TestNewServiceDoesNotRequireRolePorts(t *testing.T) {
+	service, err := management.NewService(management.Options{
+		PrincipalCreator: newFakePrincipalCreator(),
+		IdentityLinker:   newFakeIdentityLinker(),
+		APITokens:        newFakeAPITokens(),
+	})
+
+	require.NoError(t, err)
+	assert.NotNil(t, service)
+}
+
+func TestServiceCreateRole(t *testing.T) {
+	roles := newFakeRoleStore()
+	roles.role = authkit.Role{
+		ID:          "notes-reader",
+		DisplayName: "Notes reader",
+		Description: "Can read notes.",
+	}
+	service := newServiceWithRoles(t, newFakePrincipalCreator(), roles, newFakeIdentityLinker(), newFakeAPITokens())
+	req := authkit.CreateRoleRequest{
+		ID:          roles.role.ID,
+		DisplayName: roles.role.DisplayName,
+		Description: roles.role.Description,
+	}
+
+	role, err := service.CreateRole(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, roles.role, role)
+	assert.Equal(t, []authkit.CreateRoleRequest{req}, roles.createRequests)
+}
+
+func TestServiceGrantRoleAction(t *testing.T) {
+	roles := newFakeRoleStore()
+	service := newServiceWithRoles(t, newFakePrincipalCreator(), roles, newFakeIdentityLinker(), newFakeAPITokens())
+	req := authkit.GrantRoleActionRequest{
+		RoleID: "notes-reader",
+		Action: "notes:read",
+	}
+
+	err := service.GrantRoleAction(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, []authkit.GrantRoleActionRequest{req}, roles.grantRequests)
+}
+
+func TestServiceAssignPrincipalRole(t *testing.T) {
+	roles := newFakeRoleStore()
+	service := newServiceWithRoles(t, newFakePrincipalCreator(), roles, newFakeIdentityLinker(), newFakeAPITokens())
+	req := authkit.AssignPrincipalRoleRequest{
+		PrincipalID: testPrincipalID,
+		RoleID:      "notes-reader",
+	}
+
+	err := service.AssignPrincipalRole(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, []authkit.AssignPrincipalRoleRequest{req}, roles.assignRequests)
+}
+
+func TestServiceWrapsRoleErrors(t *testing.T) {
+	roleErr := errors.New("role failed")
+
+	tests := []struct {
+		name string
+		run  func(*management.Service) error
+	}{
+		{
+			name: "create role",
+			run: func(service *management.Service) error {
+				_, err := service.CreateRole(context.Background(), authkit.CreateRoleRequest{ID: "notes-reader"})
+
+				return err
+			},
+		},
+		{
+			name: "grant role action",
+			run: func(service *management.Service) error {
+				return service.GrantRoleAction(context.Background(), authkit.GrantRoleActionRequest{
+					RoleID: "notes-reader",
+					Action: "notes:read",
+				})
+			},
+		},
+		{
+			name: "assign principal role",
+			run: func(service *management.Service) error {
+				return service.AssignPrincipalRole(context.Background(), authkit.AssignPrincipalRoleRequest{
+					PrincipalID: testPrincipalID,
+					RoleID:      "notes-reader",
+				})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			roles := newFakeRoleStore()
+			roles.err = roleErr
+			service := newServiceWithRoles(
+				t,
+				newFakePrincipalCreator(),
+				roles,
+				newFakeIdentityLinker(),
+				newFakeAPITokens(),
+			)
+
+			require.ErrorIs(t, tt.run(service), roleErr)
+		})
+	}
+}
+
+func TestServiceRoleMethodsRequireRolePorts(t *testing.T) {
+	service, err := management.NewService(management.Options{
+		PrincipalCreator: newFakePrincipalCreator(),
+		IdentityLinker:   newFakeIdentityLinker(),
+		APITokens:        newFakeAPITokens(),
+	})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "create role",
+			run: func() error {
+				_, runErr := service.CreateRole(context.Background(), authkit.CreateRoleRequest{
+					ID: "notes-reader",
+				})
+
+				return runErr
+			},
+		},
+		{
+			name: "grant role action",
+			run: func() error {
+				return service.GrantRoleAction(context.Background(), authkit.GrantRoleActionRequest{
+					RoleID: "notes-reader",
+					Action: "notes:read",
+				})
+			},
+		},
+		{
+			name: "assign principal role",
+			run: func() error {
+				return service.AssignPrincipalRole(context.Background(), authkit.AssignPrincipalRoleRequest{
+					PrincipalID: testPrincipalID,
+					RoleID:      "notes-reader",
+				})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Error(t, tt.run())
+		})
+	}
+}
+
 func TestServiceLinkIdentity(t *testing.T) {
 	linker := newFakeIdentityLinker()
 	linker.identity = authkit.ExternalIdentity{
@@ -250,6 +411,34 @@ func TestServicePropagatesContextCancellation(t *testing.T) {
 			},
 		},
 		{
+			name: "create role",
+			run: func() error {
+				_, runErr := service.CreateRole(ctx, authkit.CreateRoleRequest{
+					ID: "notes-reader",
+				})
+
+				return runErr
+			},
+		},
+		{
+			name: "grant role action",
+			run: func() error {
+				return service.GrantRoleAction(ctx, authkit.GrantRoleActionRequest{
+					RoleID: "notes-reader",
+					Action: "notes:read",
+				})
+			},
+		},
+		{
+			name: "assign principal role",
+			run: func() error {
+				return service.AssignPrincipalRole(ctx, authkit.AssignPrincipalRoleRequest{
+					PrincipalID: principal.ID,
+					RoleID:      "notes-reader",
+				})
+			},
+		},
+		{
 			name: "issue API token",
 			run: func() error {
 				_, runErr := service.IssueAPIToken(ctx, management.IssueAPITokenRequest{
@@ -318,10 +507,25 @@ func newService(
 ) *management.Service {
 	t.Helper()
 
+	return newServiceWithRoles(t, creator, newFakeRoleStore(), linker, apiTokens)
+}
+
+func newServiceWithRoles(
+	t *testing.T,
+	creator authkit.PrincipalCreator,
+	roles roleStore,
+	linker authkit.IdentityLinker,
+	apiTokens management.APITokens,
+) *management.Service {
+	t.Helper()
+
 	service, err := management.NewService(management.Options{
-		PrincipalCreator: creator,
-		IdentityLinker:   linker,
-		APITokens:        apiTokens,
+		PrincipalCreator:      creator,
+		RoleCreator:           roles,
+		RoleActionGranter:     roles,
+		PrincipalRoleAssigner: roles,
+		IdentityLinker:        linker,
+		APITokens:             apiTokens,
 	})
 	require.NoError(t, err)
 
@@ -335,7 +539,13 @@ func newManagementService(
 ) *management.Service {
 	t.Helper()
 
-	return newService(t, store, store, tokenService)
+	return newServiceWithRoles(t, store, store, store, tokenService)
+}
+
+type roleStore interface {
+	authkit.RoleCreator
+	authkit.RoleActionGranter
+	authkit.PrincipalRoleAssigner
 }
 
 func newFakePrincipalCreator() *fakePrincipalCreator {
@@ -344,6 +554,10 @@ func newFakePrincipalCreator() *fakePrincipalCreator {
 
 func newFakeIdentityLinker() *fakeIdentityLinker {
 	return &fakeIdentityLinker{}
+}
+
+func newFakeRoleStore() *fakeRoleStore {
+	return &fakeRoleStore{}
 }
 
 func newFakeAPITokens() *fakeAPITokens {
@@ -388,6 +602,50 @@ func (f *fakeIdentityLinker) LinkIdentity(
 	}
 
 	return f.identity, nil
+}
+
+type fakeRoleStore struct {
+	createRequests []authkit.CreateRoleRequest
+	grantRequests  []authkit.GrantRoleActionRequest
+	assignRequests []authkit.AssignPrincipalRoleRequest
+	role           authkit.Role
+	err            error
+}
+
+func (f *fakeRoleStore) CreateRole(
+	_ context.Context,
+	req authkit.CreateRoleRequest,
+) (authkit.Role, error) {
+	f.createRequests = append(f.createRequests, req)
+	if f.err != nil {
+		return authkit.Role{}, f.err
+	}
+
+	return f.role, nil
+}
+
+func (f *fakeRoleStore) GrantRoleAction(
+	_ context.Context,
+	req authkit.GrantRoleActionRequest,
+) error {
+	f.grantRequests = append(f.grantRequests, req)
+	if f.err != nil {
+		return f.err
+	}
+
+	return nil
+}
+
+func (f *fakeRoleStore) AssignPrincipalRole(
+	_ context.Context,
+	req authkit.AssignPrincipalRoleRequest,
+) error {
+	f.assignRequests = append(f.assignRequests, req)
+	if f.err != nil {
+		return f.err
+	}
+
+	return nil
 }
 
 type fakeAPITokens struct {
