@@ -79,5 +79,6 @@ mux.Handle(
 )
 ```
 
+For route facts, see [Supply authorization facts](supply-authorization-facts.md).
 For the standard HTTP path, see
 [Compose HTTP authentication](compose-http-auth.md).

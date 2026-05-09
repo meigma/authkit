@@ -30,6 +30,7 @@ Deferred scope:
 
 - router-specific adapters
 - built-in admin HTTP APIs
+- continuous role synchronization from external identity metadata
 - broader application bootstrap builders
 
 ## Installation
@@ -86,6 +87,10 @@ For most `net/http` services, start with
 [Compose HTTP authentication](docs/docs/how-to/compose-http-auth.md).
 Applications that need full control can use
 [explicit composition](docs/docs/how-to/use-explicit-composition.md).
+Common setup tasks are covered by focused guides for
+[local roles](docs/docs/how-to/configure-local-roles.md),
+[OIDC auto-provisioning](docs/docs/how-to/auto-provision-oidc-principals.md),
+and [authorization facts](docs/docs/how-to/supply-authorization-facts.md).
 
 The [architecture](docs/docs/explanations/architecture.md) and
 [security model](docs/docs/explanations/security-model.md) explain the request
@@ -97,7 +102,8 @@ pipeline, credential independence, failure mapping, and security invariants.
 - Tutorial: [Learn authkit with the notes service](docs/docs/tutorials/notes-service.md)
 - How-to: [Compose HTTP authentication](docs/docs/how-to/compose-http-auth.md)
 - Explanation: [Architecture](docs/docs/explanations/architecture.md)
-- Reference: [Extension points](docs/docs/reference/extension-points.md)
+- Reference: [Core contracts](docs/docs/reference/core-contracts.md) and
+  [extension points](docs/docs/reference/extension-points.md)
 - Implementation plan: [PLAN.md](PLAN.md)
 
 ## Support
