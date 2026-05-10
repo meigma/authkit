@@ -5,11 +5,7 @@ It provides reusable request authentication, principal resolution, and authoriza
 
 The shared auth path works end to end: an API token or OIDC-issued JWT bearer token authenticates to an external identity, the identity resolves to an internal principal, and an authorizer checks that principal against an action, application resource, and optional caller-supplied facts.
 
-## Status
-
-authkit's public API may change as service integrations shape the library.
-
-Included now:
+## Features
 
 - core `authkit` identity, principal, resource, decision, authorization fact, and port contracts
 - an explicit `Identity -> Principal -> Authorizer` pipeline
@@ -26,25 +22,10 @@ Included now:
 - a thin Casbin authorizer adapter with replaceable request projection
 - `examples/notes`, a runnable vertical example that wires the real packages together
 
-Deferred scope:
-
-- router-specific adapters
-- built-in admin HTTP APIs
-- continuous role synchronization from external identity metadata
-- broader application bootstrap builders
-
 ## Installation
 
 ```sh
 go get github.com/meigma/authkit
-```
-
-For repository development, use the pinned toolchain in `.prototools` and run checks through Moon:
-
-```sh
-moon ci --summary minimal
-moon run docs:typecheck
-moon run docs:build
 ```
 
 ## Quick Start
@@ -104,7 +85,16 @@ pipeline, credential independence, failure mapping, and security invariants.
 - Explanation: [Architecture](docs/docs/explanations/architecture.md)
 - Reference: [Core contracts](docs/docs/reference/core-contracts.md) and
   [extension points](docs/docs/reference/extension-points.md)
-- Implementation plan: [PLAN.md](PLAN.md)
+
+## Development
+
+Use the pinned toolchain in `.prototools` and run checks through Moon:
+
+```sh
+moon ci --summary minimal
+moon run docs:typecheck
+moon run docs:build
+```
 
 ## Support
 
