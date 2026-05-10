@@ -5,46 +5,10 @@ It provides reusable request authentication, principal resolution, and authoriza
 
 The shared auth path works end to end: an API token or OIDC-issued JWT bearer token authenticates to an external identity, the identity resolves to an internal principal, and an authorizer checks that principal against an action, application resource, and optional caller-supplied facts.
 
-## Status
-
-authkit's public API may change as service integrations shape the library.
-
-Included now:
-
-- core `authkit` identity, principal, resource, decision, authorization fact, and port contracts
-- an explicit `Identity -> Principal -> Authorizer` pipeline
-- opaque API-token issuing, verification, revocation, expiration, and last-used tracking
-- memory-backed principal, role, provisioning-rule, identity-link, API-token, and OIDC provider-trust storage
-- Postgres-backed principal, role, provisioning-rule, identity-link, API-token, and OIDC provider-trust storage
-- Go-level management service for principal, role, provisioning-rule, identity-link, and API-token setup flows
-- OIDC-issued JWT bearer-token authentication from static, memory, Postgres, or app-owned trusted-provider sources
-- opt-in principal auto-provisioning for caller-approved external identities and admin-configured initial role assignment
-- `net/http` middleware with context helpers and authorization wrappers
-- optional `httpfacts` helpers for deriving decision-time facts from HTTP requests
-- thin HTTP composition helpers for common authenticator, pipeline, and middleware wiring
-- local role authorization through effective action grants
-- a thin Casbin authorizer adapter with replaceable request projection
-- `examples/notes`, a runnable vertical example that wires the real packages together
-
-Deferred scope:
-
-- router-specific adapters
-- built-in admin HTTP APIs
-- continuous role synchronization from external identity metadata
-- broader application bootstrap builders
-
 ## Installation
 
 ```sh
 go get github.com/meigma/authkit
-```
-
-For repository development, use the pinned toolchain in `.prototools` and run checks through Moon:
-
-```sh
-moon ci --summary minimal
-moon run docs:typecheck
-moon run docs:build
 ```
 
 ## Quick Start
@@ -84,27 +48,36 @@ authkit has two composition layers:
   service wiring.
 
 For most `net/http` services, start with
-[Compose HTTP authentication](docs/docs/how-to/compose-http-auth.md).
+[Compose HTTP authentication](https://authkit.meigma.dev/how-to/compose-http-auth).
 Applications that need full control can use
-[explicit composition](docs/docs/how-to/use-explicit-composition.md).
+[explicit composition](https://authkit.meigma.dev/how-to/use-explicit-composition).
 Common setup tasks are covered by focused guides for
-[local roles](docs/docs/how-to/configure-local-roles.md),
-[OIDC auto-provisioning](docs/docs/how-to/auto-provision-oidc-principals.md),
-and [authorization facts](docs/docs/how-to/supply-authorization-facts.md).
+[local roles](https://authkit.meigma.dev/how-to/configure-local-roles),
+[OIDC auto-provisioning](https://authkit.meigma.dev/how-to/auto-provision-oidc-principals),
+and [authorization facts](https://authkit.meigma.dev/how-to/supply-authorization-facts).
 
-The [architecture](docs/docs/explanations/architecture.md) and
-[security model](docs/docs/explanations/security-model.md) explain the request
+The [architecture](https://authkit.meigma.dev/explanations/architecture) and
+[security model](https://authkit.meigma.dev/explanations/security-model) explain the request
 pipeline, credential independence, failure mapping, and security invariants.
 
 ## Documentation
 
-- Docs home: [docs/docs/index.md](docs/docs/index.md)
-- Tutorial: [Learn authkit with the notes service](docs/docs/tutorials/notes-service.md)
-- How-to: [Compose HTTP authentication](docs/docs/how-to/compose-http-auth.md)
-- Explanation: [Architecture](docs/docs/explanations/architecture.md)
-- Reference: [Core contracts](docs/docs/reference/core-contracts.md) and
-  [extension points](docs/docs/reference/extension-points.md)
-- Implementation plan: [PLAN.md](PLAN.md)
+- Docs home: [authkit.meigma.dev](https://authkit.meigma.dev/)
+- Tutorial: [Learn authkit with the notes service](https://authkit.meigma.dev/tutorials/notes-service)
+- How-to: [Compose HTTP authentication](https://authkit.meigma.dev/how-to/compose-http-auth)
+- Explanation: [Architecture](https://authkit.meigma.dev/explanations/architecture)
+- Reference: [Core contracts](https://authkit.meigma.dev/reference/core-contracts) and
+  [extension points](https://authkit.meigma.dev/reference/extension-points)
+
+## Development
+
+Use the pinned toolchain in `.prototools` and run checks through Moon:
+
+```sh
+moon ci --summary minimal
+moon run docs:typecheck
+moon run docs:build
+```
 
 ## Support
 
