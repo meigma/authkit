@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 
@@ -23,12 +24,18 @@ const (
 	conditionCostLimit uint64 = 10_000
 )
 
+const (
+	conditionInterruptCheckFrequency = 100
+)
+
+//nolint:gochecknoglobals // CEL environment construction is expensive and intentionally cached process-wide.
 var conditionEnvironment struct {
 	once sync.Once
 	env  *cel.Env
 	err  error
 }
 
+//nolint:gochecknoglobals // Compiled CEL programs are reusable and safe to share across rule evaluations.
 var conditionProgramCache struct {
 	mu       sync.RWMutex
 	programs map[string]cel.Program
@@ -102,7 +109,7 @@ func compileCondition(condition string) (cel.Program, error) {
 		ast,
 		cel.CostLimit(conditionCostLimit),
 		cel.EvalOptions(cel.OptOptimize),
-		cel.InterruptCheckFrequency(100),
+		cel.InterruptCheckFrequency(conditionInterruptCheckFrequency),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("provisioning: build condition program: %w", err)
@@ -205,11 +212,8 @@ func valueHasAny(value ref.Val, accepted map[string]struct{}) bool {
 func valueHasToken(value ref.Val, token string) bool {
 	matched := false
 	forEachString(value, func(item string) {
-		for _, field := range strings.Fields(item) {
-			if field == token {
-				matched = true
-				return
-			}
+		if slices.Contains(strings.Fields(item), token) {
+			matched = true
 		}
 	})
 
@@ -263,7 +267,7 @@ func stringValue(value ref.Val) (string, bool) {
 		return text, true
 	}
 
-	native, err := value.ConvertToNative(reflect.TypeOf(""))
+	native, err := value.ConvertToNative(reflect.TypeFor[string]())
 	if err != nil {
 		return "", false
 	}

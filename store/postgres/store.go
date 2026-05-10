@@ -1174,24 +1174,6 @@ func decodeClaimPaths(encoded string) ([]authkit.ClaimPath, error) {
 	return cloneClaimPaths(paths), nil
 }
 
-func encodeClaimPath(path authkit.ClaimPath) (string, error) {
-	encoded, err := json.Marshal(path)
-	if err != nil {
-		return "", fmt.Errorf("postgres: encode claim path: %w", err)
-	}
-
-	return string(encoded), nil
-}
-
-func decodeClaimPath(encoded string) (authkit.ClaimPath, error) {
-	var path authkit.ClaimPath
-	if err := json.Unmarshal([]byte(encoded), &path); err != nil {
-		return nil, fmt.Errorf("postgres: decode claim path: %w", err)
-	}
-
-	return cloneClaimPath(path), nil
-}
-
 func decodeAttributes(encoded string) (map[string]any, error) {
 	if encoded == "" || encoded == "null" {
 		//nolint:nilnil // Nil attributes are the normalized zero value for principals.
