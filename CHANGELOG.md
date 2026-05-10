@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/meigma/authkit/compare/v0.1.0...v0.2.0) (2026-05-10)
+
+
+### Features
+
+* **provisioning:** add CEL-backed OIDC rules ([#37](https://github.com/meigma/authkit/issues/37)) ([220cf25](https://github.com/meigma/authkit/commit/220cf2595043971333433046ad4bba78e45dcb5d))
+
 ## 0.1.0 (2026-05-09)
 
 
