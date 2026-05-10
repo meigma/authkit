@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -19,6 +18,7 @@ import (
 	"github.com/meigma/authkit"
 	"github.com/meigma/authkit/apikey"
 	"github.com/meigma/authkit/oidc"
+	"github.com/meigma/authkit/provisioning"
 )
 
 const (
@@ -278,25 +278,19 @@ func (s *Store) UpdateProvisioningRule(
 		return authkit.ProvisioningRule{}, validationErr
 	}
 
-	claimPath, err := encodeClaimPath(rule.ClaimPath)
-	if err != nil {
-		return authkit.ProvisioningRule{}, err
-	}
 	tag, err := tx.Exec(
 		ctx,
 		`update authkit_provisioning_rules
 		set display_name = $2,
 			provider = $3,
-			claim_path = $4::jsonb,
-			match_values = $5,
-			enabled = $6,
+			condition = $4,
+			enabled = $5,
 			updated_at = now()
 		where id = $1`,
 		rule.ID,
 		rule.DisplayName,
 		rule.Provider,
-		claimPath,
-		rule.Values,
+		rule.Condition,
 		rule.Enabled,
 	)
 	if err != nil {
@@ -366,7 +360,7 @@ func (s *Store) ListProvisioningRules(ctx context.Context) ([]authkit.Provisioni
 
 	rows, err := s.pool.Query(
 		ctx,
-		`select r.id, r.display_name, r.provider, r.claim_path::text, r.match_values, r.enabled,
+		`select r.id, r.display_name, r.provider, r.condition, r.enabled,
 			coalesce(array_agg(rr.role_id order by rr.role_id)
 				filter (where rr.role_id is not null), '{}'::text[]) as role_ids
 		from authkit_provisioning_rules as r
@@ -896,25 +890,19 @@ func validateProvisioningRule(ctx context.Context, query queryExecutor, rule aut
 	if rule.Provider == "" {
 		return errors.New("postgres: provisioning rule provider is required")
 	}
-	if !rule.ClaimPath.Valid() {
-		return errors.New("postgres: provisioning rule claim path is required")
-	}
-	if err := validateRequiredStrings("provisioning rule value", rule.Values); err != nil {
+	if err := provisioning.ValidateCondition(rule.Condition); err != nil {
 		return fmt.Errorf("postgres: %w", err)
 	}
 	if err := validateRequiredStrings("provisioning rule role ID", rule.AssignRoleIDs); err != nil {
 		return fmt.Errorf("postgres: %w", err)
 	}
 
-	provider, err := findTrustedProvider(ctx, query, rule.Provider)
+	_, err := findTrustedProvider(ctx, query, rule.Provider)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("postgres: provider %q is not trusted", rule.Provider)
 	}
 	if err != nil {
 		return err
-	}
-	if !providerForwardsClaim(provider, rule.ClaimPath) {
-		return fmt.Errorf("postgres: provider %q does not forward claim path", rule.Provider)
 	}
 
 	var roleCount int
@@ -946,20 +934,15 @@ func provisioningRuleExists(ctx context.Context, query rowQuerier, id string) (b
 }
 
 func insertProvisioningRule(ctx context.Context, exec sqlExecutor, rule authkit.ProvisioningRule) error {
-	claimPath, err := encodeClaimPath(rule.ClaimPath)
-	if err != nil {
-		return err
-	}
 	if _, err := exec.Exec(
 		ctx,
 		`insert into authkit_provisioning_rules
-			(id, display_name, provider, claim_path, match_values, enabled)
-		values ($1, $2, $3, $4::jsonb, $5, $6)`,
+			(id, display_name, provider, condition, enabled)
+		values ($1, $2, $3, $4, $5)`,
 		rule.ID,
 		rule.DisplayName,
 		rule.Provider,
-		claimPath,
-		rule.Values,
+		rule.Condition,
 		rule.Enabled,
 	); err != nil {
 		if isPostgresCode(err, uniqueViolation) {
@@ -1002,7 +985,7 @@ func findProvisioningRule(
 ) (authkit.ProvisioningRule, error) {
 	rule, err := scanProvisioningRule(query.QueryRow(
 		ctx,
-		`select r.id, r.display_name, r.provider, r.claim_path::text, r.match_values, r.enabled,
+		`select r.id, r.display_name, r.provider, r.condition, r.enabled,
 			coalesce(array_agg(rr.role_id order by rr.role_id)
 				filter (where rr.role_id is not null), '{}'::text[]) as role_ids
 		from authkit_provisioning_rules as r
@@ -1020,24 +1003,16 @@ func findProvisioningRule(
 
 func scanProvisioningRule(row scanner) (authkit.ProvisioningRule, error) {
 	var rule authkit.ProvisioningRule
-	var claimPath string
 	if err := row.Scan(
 		&rule.ID,
 		&rule.DisplayName,
 		&rule.Provider,
-		&claimPath,
-		&rule.Values,
+		&rule.Condition,
 		&rule.Enabled,
 		&rule.AssignRoleIDs,
 	); err != nil {
 		return authkit.ProvisioningRule{}, err
 	}
-
-	path, err := decodeClaimPath(claimPath)
-	if err != nil {
-		return authkit.ProvisioningRule{}, err
-	}
-	rule.ClaimPath = path
 
 	return cloneProvisioningRule(rule), nil
 }
@@ -1199,24 +1174,6 @@ func decodeClaimPaths(encoded string) ([]authkit.ClaimPath, error) {
 	return cloneClaimPaths(paths), nil
 }
 
-func encodeClaimPath(path authkit.ClaimPath) (string, error) {
-	encoded, err := json.Marshal(path)
-	if err != nil {
-		return "", fmt.Errorf("postgres: encode claim path: %w", err)
-	}
-
-	return string(encoded), nil
-}
-
-func decodeClaimPath(encoded string) (authkit.ClaimPath, error) {
-	var path authkit.ClaimPath
-	if err := json.Unmarshal([]byte(encoded), &path); err != nil {
-		return nil, fmt.Errorf("postgres: decode claim path: %w", err)
-	}
-
-	return cloneClaimPath(path), nil
-}
-
 func decodeAttributes(encoded string) (map[string]any, error) {
 	if encoded == "" || encoded == "null" {
 		//nolint:nilnil // Nil attributes are the normalized zero value for principals.
@@ -1289,19 +1246,12 @@ func cloneClaimPath(path authkit.ClaimPath) authkit.ClaimPath {
 	return cloned
 }
 
-func providerForwardsClaim(provider oidc.Provider, path authkit.ClaimPath) bool {
-	return slices.ContainsFunc(provider.ForwardedClaims, func(candidate authkit.ClaimPath) bool {
-		return slices.Equal(candidate, path)
-	})
-}
-
 func provisioningRuleFromCreate(req authkit.CreateProvisioningRuleRequest) authkit.ProvisioningRule {
 	return normalizeProvisioningRule(authkit.ProvisioningRule{
 		ID:            req.ID,
 		DisplayName:   req.DisplayName,
 		Provider:      req.Provider,
-		ClaimPath:     cloneClaimPath(req.ClaimPath),
-		Values:        cloneStrings(req.Values),
+		Condition:     provisioning.NormalizeCondition(req.Condition),
 		AssignRoleIDs: cloneStrings(req.AssignRoleIDs),
 		Enabled:       req.Enabled,
 	})
@@ -1312,23 +1262,19 @@ func provisioningRuleFromUpdate(req authkit.UpdateProvisioningRuleRequest) authk
 		ID:            req.ID,
 		DisplayName:   req.DisplayName,
 		Provider:      req.Provider,
-		ClaimPath:     cloneClaimPath(req.ClaimPath),
-		Values:        cloneStrings(req.Values),
+		Condition:     provisioning.NormalizeCondition(req.Condition),
 		AssignRoleIDs: cloneStrings(req.AssignRoleIDs),
 		Enabled:       req.Enabled,
 	})
 }
 
 func normalizeProvisioningRule(rule authkit.ProvisioningRule) authkit.ProvisioningRule {
-	rule.Values = uniqueStrings(rule.Values)
 	rule.AssignRoleIDs = uniqueStrings(rule.AssignRoleIDs)
 
 	return rule
 }
 
 func cloneProvisioningRule(rule authkit.ProvisioningRule) authkit.ProvisioningRule {
-	rule.ClaimPath = cloneClaimPath(rule.ClaimPath)
-	rule.Values = cloneStrings(rule.Values)
 	rule.AssignRoleIDs = cloneStrings(rule.AssignRoleIDs)
 
 	return rule

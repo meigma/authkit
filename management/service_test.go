@@ -346,8 +346,7 @@ func TestServiceProvisioningRuleMethods(t *testing.T) {
 		ID:            rules.rule.ID,
 		DisplayName:   rules.rule.DisplayName,
 		Provider:      rules.rule.Provider,
-		ClaimPath:     rules.rule.ClaimPath,
-		Values:        rules.rule.Values,
+		Condition:     rules.rule.Condition,
 		AssignRoleIDs: rules.rule.AssignRoleIDs,
 		Enabled:       rules.rule.Enabled,
 	}
@@ -355,8 +354,7 @@ func TestServiceProvisioningRuleMethods(t *testing.T) {
 		ID:            rules.rule.ID,
 		DisplayName:   "Updated",
 		Provider:      rules.rule.Provider,
-		ClaimPath:     rules.rule.ClaimPath,
-		Values:        rules.rule.Values,
+		Condition:     rules.rule.Condition,
 		AssignRoleIDs: rules.rule.AssignRoleIDs,
 		Enabled:       false,
 	}
@@ -922,8 +920,7 @@ func provisioningRule() authkit.ProvisioningRule {
 		ID:            "engineering-readers",
 		DisplayName:   "Engineering readers",
 		Provider:      "https://issuer.example",
-		ClaimPath:     authkit.ClaimPath{"groups"},
-		Values:        []string{"/engineering"},
+		Condition:     `hasAny(claims.groups, ["/engineering"])`,
 		AssignRoleIDs: []string{"notes-reader"},
 		Enabled:       true,
 	}

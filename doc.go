@@ -9,6 +9,6 @@
 // authenticators for opaque API tokens and OIDC-issued JWT bearer tokens. The
 // provisioning package can wrap a resolver to create principals for
 // caller-approved identities and assign initial local roles from admin-managed
-// provisioning rules. The roleauth package authorizes from local admin-managed
-// roles and effective action grants.
+// CEL provisioning rules. The roleauth package authorizes from local
+// admin-managed roles and effective action grants.
 package authkit

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -147,8 +148,7 @@ func TestResolverAssignsInitialRolesFromProvisioningRules(t *testing.T) {
 				{
 					ID:            "engineering-readers",
 					Provider:      testIdentity().Provider,
-					ClaimPath:     authkit.ClaimPath{"groups"},
-					Values:        []string{"/engineering"},
+					Condition:     `hasAny(claims.groups, ["/engineering"])`,
 					AssignRoleIDs: []string{"reader"},
 					Enabled:       true,
 				},
@@ -248,69 +248,90 @@ func TestResolverDoesNotProvisionUnexpectedResolverErrors(t *testing.T) {
 
 func TestMatchRules(t *testing.T) {
 	identity := authkit.Identity{
-		Provider: "https://issuer.example",
-		Subject:  "user-123",
+		Provider:     "https://token.actions.githubusercontent.com",
+		Subject:      "repo:meigma/imgsrv:ref:refs/heads/main",
+		CredentialID: "jwt:abc123",
 		Claims: map[string]any{
-			"email":  "ada@example.test",
-			"groups": []any{"/engineering", "/platform"},
-			"realm_access": map[string]any{
-				"roles": []string{"writer", "admin"},
-			},
+			"repository_id": "123456789",
+			"workflow_ref":  "meigma/imgsrv/.github/workflows/publish.yml@refs/heads/main",
+			"scope":         "openid content.write",
+			"groups":        []any{"publishers", "operators"},
 		},
 	}
 	rules := []authkit.ProvisioningRule{
 		{
 			ID:            "disabled",
 			Provider:      identity.Provider,
-			ClaimPath:     authkit.ClaimPath{"groups"},
-			Values:        []string{"/engineering"},
+			Condition:     "true",
 			AssignRoleIDs: []string{"disabled"},
 		},
 		{
 			ID:            "provider-mismatch",
 			Provider:      "https://other.example",
-			ClaimPath:     authkit.ClaimPath{"groups"},
-			Values:        []string{"/engineering"},
+			Condition:     "true",
 			AssignRoleIDs: []string{"other"},
 			Enabled:       true,
 		},
 		{
 			ID:            "missing-claim",
 			Provider:      identity.Provider,
-			ClaimPath:     authkit.ClaimPath{"department"},
-			Values:        []string{"engineering"},
+			Condition:     `claims.department == "engineering"`,
 			AssignRoleIDs: []string{"department"},
 			Enabled:       true,
 		},
 		{
-			ID:            "string-match",
+			ID:            "eval-error",
 			Provider:      identity.Provider,
-			ClaimPath:     authkit.ClaimPath{"email"},
-			Values:        []string{"ada@example.test"},
-			AssignRoleIDs: []string{"profiled"},
+			Condition:     `claims.missing.startsWith("repo:")`,
+			AssignRoleIDs: []string{"eval-error"},
 			Enabled:       true,
 		},
 		{
-			ID:            "list-match",
-			Provider:      identity.Provider,
-			ClaimPath:     authkit.ClaimPath{"groups"},
-			Values:        []string{"/engineering"},
-			AssignRoleIDs: []string{"reader", "profiled"},
+			ID:       "github-main-publisher",
+			Provider: identity.Provider,
+			Condition: `identity.subject == "repo:meigma/imgsrv:ref:refs/heads/main" &&
+				claims.repository_id == "123456789" &&
+				claims.workflow_ref == "meigma/imgsrv/.github/workflows/publish.yml@refs/heads/main"`,
+			AssignRoleIDs: []string{"content-writer"},
 			Enabled:       true,
 		},
 		{
-			ID:            "nested-list-match",
+			ID:            "scope-match",
 			Provider:      identity.Provider,
-			ClaimPath:     authkit.ClaimPath{"realm_access", "roles"},
-			Values:        []string{"writer"},
-			AssignRoleIDs: []string{"writer"},
+			Condition:     `hasToken(claims.scope, "content.write")`,
+			AssignRoleIDs: []string{"scope-writer", "content-writer"},
+			Enabled:       true,
+		},
+		{
+			ID:            "group-match",
+			Provider:      identity.Provider,
+			Condition:     `hasAny(claims.groups, ["publishers"])`,
+			AssignRoleIDs: []string{"group-writer"},
 			Enabled:       true,
 		},
 	}
 
 	roleIDs := provisioning.MatchRules(identity, rules)
 
-	assert.Equal(t, []string{"profiled", "reader", "writer"}, roleIDs)
+	assert.Equal(t, []string{"content-writer", "scope-writer", "group-writer"}, roleIDs)
+}
+
+func TestValidateConditionRejectsInvalidExpressions(t *testing.T) {
+	tests := []struct {
+		name      string
+		condition string
+	}{
+		{name: "syntax error", condition: "claims.scope =="},
+		{name: "type error", condition: "identity.subject"},
+		{name: "empty", condition: ""},
+		{name: "too large", condition: strings.Repeat("a", provisioning.MaxConditionBytes+1)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Error(t, provisioning.ValidateCondition(tt.condition))
+		})
+	}
 }
 
 func newResolver(

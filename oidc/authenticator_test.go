@@ -675,8 +675,7 @@ func TestOIDCProvisioningRulesAssignInitialRoles(t *testing.T) {
 		ID:            "engineering-readers",
 		DisplayName:   "Engineering readers",
 		Provider:      provider.Issuer,
-		ClaimPath:     authkit.ClaimPath{"groups"},
-		Values:        []string{"/engineering"},
+		Condition:     `hasAny(claims.groups, ["/engineering"])`,
 		AssignRoleIDs: []string{"notes-reader"},
 		Enabled:       true,
 	})
@@ -746,8 +745,7 @@ func TestOIDCProvisioningRulesDoNotAssignRolesWhenClaimIsMissing(t *testing.T) {
 		ID:            "engineering-readers",
 		DisplayName:   "Engineering readers",
 		Provider:      provider.Issuer,
-		ClaimPath:     authkit.ClaimPath{"groups"},
-		Values:        []string{"/engineering"},
+		Condition:     `hasAny(claims.groups, ["/engineering"])`,
 		AssignRoleIDs: []string{"notes-reader"},
 		Enabled:       true,
 	})

@@ -62,15 +62,14 @@ if err != nil {
 
 ## Create A Provisioning Rule
 
-Create an exact-match rule for the trusted provider and forwarded claim:
+Create a CEL-backed rule for the trusted provider and forwarded claims:
 
 ```go
 _, err = store.CreateProvisioningRule(ctx, authkit.CreateProvisioningRuleRequest{
 	ID:            "engineering-readers",
 	DisplayName:   "Engineering readers",
 	Provider:      provider.Issuer,
-	ClaimPath:     authkit.ClaimPath{"groups"},
-	Values:        []string{"/engineering"},
+	Condition:     `hasAny(claims.groups, ["/engineering"])`,
 	AssignRoleIDs: []string{"notes-reader"},
 	Enabled:       true,
 })
@@ -79,7 +78,19 @@ if err != nil {
 }
 ```
 
-Rules match string claims and string-list claims. Missing claims do not match.
+Rules are compiled and type-checked when they are created or updated. The CEL
+environment is intentionally small:
+
+- `identity.provider`
+- `identity.subject`
+- `identity.credential_id`
+- `claims`, containing only verified claims forwarded by trusted provider
+  configuration
+
+Conditions must return `bool`. Evaluation errors, missing claims, disabled
+rules, and provider mismatches do not match. Two helpers cover common token
+shapes: `hasAny(value, ["accepted"])` for string or string-list claims and
+`hasToken(claims.scope, "scope-name")` for space-delimited OIDC scope strings.
 
 ## Build The OIDC Authenticator
 
