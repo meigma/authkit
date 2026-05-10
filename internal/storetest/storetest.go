@@ -3,6 +3,7 @@ package storetest
 import (
 	"context"
 	"crypto/sha256"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -28,9 +29,13 @@ const (
 // Store is the complete storage surface exercised by Run.
 type Store interface {
 	authkit.PrincipalCreator
+	authkit.PrincipalFinder
+	authkit.PrincipalLister
 	authkit.RoleCreator
 	authkit.RoleActionGranter
 	authkit.PrincipalRoleAssigner
+	authkit.PrincipalRoleUnassigner
+	authkit.PrincipalRoleAssignmentLister
 	authkit.PrincipalActionResolver
 	authkit.ProvisioningRuleCreator
 	authkit.ProvisioningRuleUpdater
@@ -41,6 +46,7 @@ type Store interface {
 	authkit.IdentityProvisioner
 	authkit.PrincipalResolver
 	apikey.TokenStore
+	apikey.TokenMetadataLister
 	oidc.ProviderTrustStore
 }
 
@@ -88,6 +94,56 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 
 		require.Error(t, err)
 		assert.Empty(t, principal)
+	})
+
+	t.Run("find and list principals", func(t *testing.T) {
+		store := newStore(t)
+		first, err := store.CreatePrincipal(context.Background(), authkit.CreatePrincipalRequest{
+			Kind:        authkit.PrincipalKindUser,
+			DisplayName: testDisplayName,
+			Attributes: map[string]any{
+				"team": "platform",
+			},
+		})
+		require.NoError(t, err)
+		second, err := store.CreatePrincipal(context.Background(), authkit.CreatePrincipalRequest{
+			Kind:        authkit.PrincipalKindService,
+			DisplayName: "Deploy service",
+		})
+		require.NoError(t, err)
+
+		found, err := store.FindPrincipal(context.Background(), first.ID)
+		require.NoError(t, err)
+		assert.Equal(t, first, found)
+
+		first.Attributes["team"] = "changed"
+		found.Attributes["team"] = "changed from found"
+
+		foundAgain, err := store.FindPrincipal(context.Background(), first.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "platform", foundAgain.Attributes["team"])
+
+		principals, err := store.ListPrincipals(context.Background())
+		require.NoError(t, err)
+		want := []authkit.Principal{foundAgain, second}
+		sort.Slice(want, func(i, j int) bool {
+			return want[i].ID < want[j].ID
+		})
+		assert.Equal(t, want, principals)
+
+		principals[0].Attributes["team"] = "changed from list"
+		foundAfterListMutation, err := store.FindPrincipal(context.Background(), first.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "platform", foundAfterListMutation.Attributes["team"])
+	})
+
+	t.Run("find principal missing behavior", func(t *testing.T) {
+		store := newStore(t)
+
+		found, err := store.FindPrincipal(context.Background(), "missing")
+
+		require.ErrorIs(t, err, authkit.ErrPrincipalNotFound)
+		assert.Empty(t, found)
 	})
 
 	t.Run("create role", func(t *testing.T) {
@@ -200,6 +256,41 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 		assert.Equal(t, []string{testAction}, actions)
 	})
 
+	t.Run("list and unassign principal roles", func(t *testing.T) {
+		store := newStore(t)
+		principal := createPrincipal(t, store)
+		createRole(t, store, "writers")
+		createRole(t, store, "readers")
+		for _, assignment := range []authkit.AssignPrincipalRoleRequest{
+			{PrincipalID: principal.ID, RoleID: "writers"},
+			{PrincipalID: principal.ID, RoleID: "readers"},
+		} {
+			require.NoError(t, store.AssignPrincipalRole(context.Background(), assignment))
+		}
+
+		assignments, err := store.ListPrincipalRoleAssignments(context.Background(), principal.ID)
+		require.NoError(t, err)
+		assert.Equal(t, []authkit.PrincipalRoleAssignment{
+			{PrincipalID: principal.ID, RoleID: "readers"},
+			{PrincipalID: principal.ID, RoleID: "writers"},
+		}, assignments)
+
+		require.NoError(t, store.UnassignPrincipalRole(context.Background(), authkit.UnassignPrincipalRoleRequest{
+			PrincipalID: principal.ID,
+			RoleID:      "writers",
+		}))
+		require.NoError(t, store.UnassignPrincipalRole(context.Background(), authkit.UnassignPrincipalRoleRequest{
+			PrincipalID: principal.ID,
+			RoleID:      "writers",
+		}))
+
+		assignments, err = store.ListPrincipalRoleAssignments(context.Background(), principal.ID)
+		require.NoError(t, err)
+		assert.Equal(t, []authkit.PrincipalRoleAssignment{
+			{PrincipalID: principal.ID, RoleID: "readers"},
+		}, assignments)
+	})
+
 	t.Run("assign principal role validates request", func(t *testing.T) {
 		store := newStore(t)
 		principal := createPrincipal(t, store)
@@ -242,6 +333,54 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 				require.Error(t, store.AssignPrincipalRole(context.Background(), tt.req))
 			})
 		}
+	})
+
+	t.Run("unassign and list principal roles validate request", func(t *testing.T) {
+		store := newStore(t)
+		principal := createPrincipal(t, store)
+		createRole(t, store, testRoleID)
+
+		tests := []struct {
+			name string
+			req  authkit.UnassignPrincipalRoleRequest
+		}{
+			{
+				name: "missing principal ID",
+				req: authkit.UnassignPrincipalRoleRequest{
+					RoleID: testRoleID,
+				},
+			},
+			{
+				name: "missing role ID",
+				req: authkit.UnassignPrincipalRoleRequest{
+					PrincipalID: principal.ID,
+				},
+			},
+			{
+				name: "missing principal",
+				req: authkit.UnassignPrincipalRoleRequest{
+					PrincipalID: "missing",
+					RoleID:      testRoleID,
+				},
+			},
+			{
+				name: "missing role",
+				req: authkit.UnassignPrincipalRoleRequest{
+					PrincipalID: principal.ID,
+					RoleID:      "missing",
+				},
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				require.Error(t, store.UnassignPrincipalRole(context.Background(), tt.req))
+			})
+		}
+
+		assignments, err := store.ListPrincipalRoleAssignments(context.Background(), "missing")
+		require.ErrorIs(t, err, authkit.ErrPrincipalNotFound)
+		assert.Nil(t, assignments)
 	})
 
 	t.Run("resolve principal actions returns distinct sorted actions", func(t *testing.T) {
@@ -930,6 +1069,39 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 				},
 			},
 			{
+				name: "find principal",
+				run: func() error {
+					_, runErr := store.FindPrincipal(ctx, principal.ID)
+
+					return runErr
+				},
+			},
+			{
+				name: "list principals",
+				run: func() error {
+					_, runErr := store.ListPrincipals(ctx)
+
+					return runErr
+				},
+			},
+			{
+				name: "unassign principal role",
+				run: func() error {
+					return store.UnassignPrincipalRole(ctx, authkit.UnassignPrincipalRoleRequest{
+						PrincipalID: principal.ID,
+						RoleID:      testRoleID,
+					})
+				},
+			},
+			{
+				name: "list principal role assignments",
+				run: func() error {
+					_, runErr := store.ListPrincipalRoleAssignments(ctx, principal.ID)
+
+					return runErr
+				},
+			},
+			{
 				name: "link identity",
 				run: func() error {
 					_, runErr := store.LinkIdentity(ctx, authkit.LinkIdentityRequest{
@@ -970,6 +1142,14 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 				name: "find token",
 				run: func() error {
 					_, runErr := store.FindToken(ctx, token.ID)
+
+					return runErr
+				},
+			},
+			{
+				name: "list principal token metadata",
+				run: func() error {
+					_, runErr := store.ListPrincipalTokenMetadata(ctx, principal.ID)
 
 					return runErr
 				},
@@ -1104,6 +1284,53 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 		assert.Equal(t, revokedAt, *foundAgain.RevokedAt)
 	})
 
+	t.Run("list principal token metadata", func(t *testing.T) {
+		store := newStore(t)
+		first := createPrincipal(t, store)
+		second := createPrincipal(t, store)
+		now := fixedStoreTime()
+		firstToken := createToken(t, store, now, first.ID)
+		secondToken := tokenFixture(now, first.ID)
+		secondToken.ID = "token_2"
+		secondToken.Name = "second token"
+		require.NoError(t, store.CreateToken(context.Background(), secondToken))
+		otherToken := tokenFixture(now, second.ID)
+		otherToken.ID = "token_3"
+		require.NoError(t, store.CreateToken(context.Background(), otherToken))
+		usedAt := now.Add(time.Hour)
+		revokedAt := now.Add(2 * time.Hour)
+		require.NoError(t, store.UpdateTokenLastUsed(context.Background(), secondToken.ID, usedAt))
+		require.NoError(t, store.RevokeToken(context.Background(), secondToken.ID, revokedAt))
+
+		tokens, err := store.ListPrincipalTokenMetadata(context.Background(), first.ID)
+		require.NoError(t, err)
+		require.Len(t, tokens, 2)
+		assert.Equal(t, apikey.TokenMetadata{
+			ID:          firstToken.ID,
+			PrincipalID: first.ID,
+			Name:        firstToken.Name,
+			ExpiresAt:   firstToken.ExpiresAt,
+		}, tokens[0])
+		assert.Equal(t, secondToken.ID, tokens[1].ID)
+		assert.Equal(t, first.ID, tokens[1].PrincipalID)
+		assert.Equal(t, secondToken.Name, tokens[1].Name)
+		assert.Equal(t, secondToken.ExpiresAt, tokens[1].ExpiresAt)
+		require.NotNil(t, tokens[1].LastUsedAt)
+		require.NotNil(t, tokens[1].RevokedAt)
+		assert.Equal(t, usedAt, *tokens[1].LastUsedAt)
+		assert.Equal(t, revokedAt, *tokens[1].RevokedAt)
+
+		*tokens[1].LastUsedAt = now
+		*tokens[1].RevokedAt = now
+		listedAgain, err := store.ListPrincipalTokenMetadata(context.Background(), first.ID)
+		require.NoError(t, err)
+		require.Len(t, listedAgain, 2)
+		require.NotNil(t, listedAgain[1].LastUsedAt)
+		require.NotNil(t, listedAgain[1].RevokedAt)
+		assert.Equal(t, usedAt, *listedAgain[1].LastUsedAt)
+		assert.Equal(t, revokedAt, *listedAgain[1].RevokedAt)
+	})
+
 	t.Run("token missing behavior", func(t *testing.T) {
 		store := newStore(t)
 		now := fixedStoreTime()
@@ -1118,6 +1345,10 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 			apikey.ErrTokenNotFound,
 		)
 		require.ErrorIs(t, store.RevokeToken(context.Background(), "missing", now), apikey.ErrTokenNotFound)
+
+		tokens, err := store.ListPrincipalTokenMetadata(context.Background(), "missing")
+		require.ErrorIs(t, err, authkit.ErrPrincipalNotFound)
+		assert.Nil(t, tokens)
 	})
 
 	t.Run("api token service integration", func(t *testing.T) {

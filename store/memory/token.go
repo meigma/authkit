@@ -3,8 +3,10 @@ package memory
 import (
 	"context"
 	"errors"
+	"sort"
 	"time"
 
+	"github.com/meigma/authkit"
 	"github.com/meigma/authkit/apikey"
 )
 
@@ -87,11 +89,55 @@ func (s *Store) RevokeToken(ctx context.Context, tokenID string, revokedAt time.
 	return nil
 }
 
+// ListPrincipalTokenMetadata returns API-token metadata for principalID.
+func (s *Store) ListPrincipalTokenMetadata(
+	ctx context.Context,
+	principalID string,
+) ([]apikey.TokenMetadata, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if principalID == "" {
+		return nil, errors.New("memory: principal ID is required")
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if _, ok := s.principals[principalID]; !ok {
+		return nil, authkit.ErrPrincipalNotFound
+	}
+
+	tokens := make([]apikey.TokenMetadata, 0)
+	for _, token := range s.tokens {
+		if token.PrincipalID != principalID {
+			continue
+		}
+		tokens = append(tokens, tokenMetadataFromStored(token))
+	}
+	sort.Slice(tokens, func(i, j int) bool {
+		return tokens[i].ID < tokens[j].ID
+	})
+
+	return tokens, nil
+}
+
 func cloneStoredToken(token apikey.StoredToken) apikey.StoredToken {
 	token.LastUsedAt = cloneTime(token.LastUsedAt)
 	token.RevokedAt = cloneTime(token.RevokedAt)
 
 	return token
+}
+
+func tokenMetadataFromStored(token apikey.StoredToken) apikey.TokenMetadata {
+	return apikey.TokenMetadata{
+		ID:          token.ID,
+		PrincipalID: token.PrincipalID,
+		Name:        token.Name,
+		ExpiresAt:   token.ExpiresAt,
+		LastUsedAt:  cloneTime(token.LastUsedAt),
+		RevokedAt:   cloneTime(token.RevokedAt),
+	}
 }
 
 func cloneTime(value *time.Time) *time.Time {

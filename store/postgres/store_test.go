@@ -14,9 +14,13 @@ import (
 
 func TestStoreSatisfiesAuthkitContracts(_ *testing.T) {
 	var _ authkit.PrincipalCreator = (*Store)(nil)
+	var _ authkit.PrincipalFinder = (*Store)(nil)
+	var _ authkit.PrincipalLister = (*Store)(nil)
 	var _ authkit.RoleCreator = (*Store)(nil)
 	var _ authkit.RoleActionGranter = (*Store)(nil)
 	var _ authkit.PrincipalRoleAssigner = (*Store)(nil)
+	var _ authkit.PrincipalRoleUnassigner = (*Store)(nil)
+	var _ authkit.PrincipalRoleAssignmentLister = (*Store)(nil)
 	var _ authkit.PrincipalActionResolver = (*Store)(nil)
 	var _ authkit.IdentityLinker = (*Store)(nil)
 	var _ authkit.IdentityProvisioner = (*Store)(nil)
@@ -27,6 +31,7 @@ func TestStoreSatisfiesAuthkitContracts(_ *testing.T) {
 	var _ authkit.ProvisioningRuleFinder = (*Store)(nil)
 	var _ authkit.ProvisioningRuleLister = (*Store)(nil)
 	var _ apikey.TokenStore = (*Store)(nil)
+	var _ apikey.TokenMetadataLister = (*Store)(nil)
 	var _ oidc.ProviderSource = (*Store)(nil)
 	var _ oidc.ProviderTrustStore = (*Store)(nil)
 }

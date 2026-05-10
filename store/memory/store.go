@@ -76,6 +76,46 @@ func (s *Store) CreatePrincipal(ctx context.Context, req authkit.CreatePrincipal
 	return clonePrincipal(principal), nil
 }
 
+// FindPrincipal returns a principal by ID.
+func (s *Store) FindPrincipal(ctx context.Context, id string) (authkit.Principal, error) {
+	if err := ctx.Err(); err != nil {
+		return authkit.Principal{}, err
+	}
+	if id == "" {
+		return authkit.Principal{}, errors.New("memory: principal ID is required")
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	principal, ok := s.principals[id]
+	if !ok {
+		return authkit.Principal{}, authkit.ErrPrincipalNotFound
+	}
+
+	return clonePrincipal(principal), nil
+}
+
+// ListPrincipals returns all principals sorted by ID.
+func (s *Store) ListPrincipals(ctx context.Context) ([]authkit.Principal, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	principals := make([]authkit.Principal, 0, len(s.principals))
+	for _, principal := range s.principals {
+		principals = append(principals, clonePrincipal(principal))
+	}
+	sort.Slice(principals, func(i, j int) bool {
+		return principals[i].ID < principals[j].ID
+	})
+
+	return principals, nil
+}
+
 // CreateRole creates a local role in the store.
 func (s *Store) CreateRole(ctx context.Context, req authkit.CreateRoleRequest) (authkit.Role, error) {
 	if err := ctx.Err(); err != nil {
@@ -151,6 +191,68 @@ func (s *Store) AssignPrincipalRole(ctx context.Context, req authkit.AssignPrinc
 	s.principalRoles[req.PrincipalID][req.RoleID] = struct{}{}
 
 	return nil
+}
+
+// UnassignPrincipalRole removes a principal from a local role.
+func (s *Store) UnassignPrincipalRole(ctx context.Context, req authkit.UnassignPrincipalRoleRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if req.PrincipalID == "" {
+		return errors.New("memory: principal ID is required")
+	}
+	if req.RoleID == "" {
+		return errors.New("memory: role ID is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.principals[req.PrincipalID]; !ok {
+		return authkit.ErrPrincipalNotFound
+	}
+	if _, ok := s.roles[req.RoleID]; !ok {
+		return fmt.Errorf("memory: role %q does not exist", req.RoleID)
+	}
+	delete(s.principalRoles[req.PrincipalID], req.RoleID)
+	if len(s.principalRoles[req.PrincipalID]) == 0 {
+		delete(s.principalRoles, req.PrincipalID)
+	}
+
+	return nil
+}
+
+// ListPrincipalRoleAssignments returns role assignments for a principal.
+func (s *Store) ListPrincipalRoleAssignments(
+	ctx context.Context,
+	principalID string,
+) ([]authkit.PrincipalRoleAssignment, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if principalID == "" {
+		return nil, errors.New("memory: principal ID is required")
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if _, ok := s.principals[principalID]; !ok {
+		return nil, authkit.ErrPrincipalNotFound
+	}
+
+	assignments := make([]authkit.PrincipalRoleAssignment, 0, len(s.principalRoles[principalID]))
+	for roleID := range s.principalRoles[principalID] {
+		assignments = append(assignments, authkit.PrincipalRoleAssignment{
+			PrincipalID: principalID,
+			RoleID:      roleID,
+		})
+	}
+	sort.Slice(assignments, func(i, j int) bool {
+		return assignments[i].RoleID < assignments[j].RoleID
+	})
+
+	return assignments, nil
 }
 
 // ResolvePrincipalActions returns the distinct actions granted to principalID through roles.

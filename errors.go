@@ -17,4 +17,7 @@ var (
 
 	// ErrProvisioningRuleNotFound indicates that a provisioning rule does not exist.
 	ErrProvisioningRuleNotFound = errors.New("authkit: provisioning rule not found")
+
+	// ErrPrincipalNotFound indicates that a principal does not exist.
+	ErrPrincipalNotFound = errors.New("authkit: principal not found")
 )

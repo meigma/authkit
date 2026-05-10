@@ -37,6 +37,27 @@ type IssuedToken struct {
 	IdentityLink authkit.LinkIdentityRequest
 }
 
+// TokenMetadata describes an API token without its secret material.
+type TokenMetadata struct {
+	// ID is the stable lookup identifier embedded in the token.
+	ID string
+
+	// PrincipalID identifies the principal the token authenticates as.
+	PrincipalID string
+
+	// Name is an optional human-readable token label.
+	Name string
+
+	// ExpiresAt is the time after which the token must no longer authenticate.
+	ExpiresAt time.Time
+
+	// LastUsedAt records the last successful token verification time when known.
+	LastUsedAt *time.Time
+
+	// RevokedAt records when the token was revoked.
+	RevokedAt *time.Time
+}
+
 // StoredToken is the storage representation of an API token.
 type StoredToken struct {
 	// ID is the stable lookup identifier embedded in the token.
