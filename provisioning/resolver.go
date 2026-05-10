@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 
 	"github.com/meigma/authkit"
 )
@@ -106,11 +105,15 @@ func (r *Resolver) initialRoleIDs(ctx context.Context, identity authkit.Identity
 		return nil, fmt.Errorf("provisioning: list provisioning rules: %w", err)
 	}
 
-	return MatchRules(identity, rules), nil
+	return matchRules(ctx, identity, rules), nil
 }
 
 // MatchRules returns local role IDs assigned by provisioning rules for identity.
 func MatchRules(identity authkit.Identity, rules []authkit.ProvisioningRule) []string {
+	return matchRules(context.Background(), identity, rules)
+}
+
+func matchRules(ctx context.Context, identity authkit.Identity, rules []authkit.ProvisioningRule) []string {
 	if len(rules) == 0 {
 		return nil
 	}
@@ -121,9 +124,7 @@ func MatchRules(identity authkit.Identity, rules []authkit.ProvisioningRule) []s
 		if !rule.Enabled || rule.Provider != identity.Provider {
 			continue
 		}
-
-		value, ok := rule.ClaimPath.Lookup(identity.Claims)
-		if !ok || !claimMatches(value, rule.Values) {
+		if !conditionMatches(ctx, identity, rule.Condition) {
 			continue
 		}
 
@@ -141,23 +142,4 @@ func MatchRules(identity authkit.Identity, rules []authkit.ProvisioningRule) []s
 	}
 
 	return roleIDs
-}
-
-func claimMatches(value any, accepted []string) bool {
-	switch typed := value.(type) {
-	case string:
-		return slices.Contains(accepted, typed)
-	case []string:
-		return slices.ContainsFunc(typed, func(item string) bool {
-			return slices.Contains(accepted, item)
-		})
-	case []any:
-		return slices.ContainsFunc(typed, func(item any) bool {
-			itemString, ok := item.(string)
-
-			return ok && slices.Contains(accepted, itemString)
-		})
-	default:
-		return false
-	}
 }

@@ -119,8 +119,10 @@ create a principal.
 
 Provisioning always starts with an application-owned approval point. When a
 rule source is configured, enabled provisioning rules may add initial local
-role assignments during the same create-and-link operation. Missing claims do
-not match rules, and existing principals are not re-synced.
+role assignments during the same create-and-link operation. Rule conditions are
+CEL bool expressions over the verified identity and forwarded claims; missing
+claims and evaluation errors do not match rules, and existing principals are
+not re-synced.
 
 The OIDC authenticator and provisioning resolver have separate jobs. The
 authenticator verifies the token and forwards only configured claims. The

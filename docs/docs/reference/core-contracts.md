@@ -50,7 +50,7 @@ succeeds.
 
 ## ProvisioningRule
 
-`authkit.ProvisioningRule` describes an admin-managed exact-match rule for
+`authkit.ProvisioningRule` describes an admin-managed CEL-backed rule for
 initial role assignment during auto-provisioning.
 
 | Field | Type | Description |
@@ -58,10 +58,16 @@ initial role assignment during auto-provisioning.
 | `ID` | `string` | Stable application-owned rule identifier. |
 | `DisplayName` | `string` | Human-readable label. |
 | `Provider` | `string` | Trusted identity provider this rule applies to. |
-| `ClaimPath` | `authkit.ClaimPath` | Forwarded identity claim inspected by the rule. |
-| `Values` | `[]string` | Exact claim values that satisfy the rule. |
+| `Condition` | `string` | CEL bool expression over `identity` and forwarded verified `claims`. |
 | `AssignRoleIDs` | `[]string` | Local role IDs assigned when the rule matches. |
 | `Enabled` | `bool` | Whether the rule participates in runtime provisioning. |
+
+The provisioning CEL environment exposes `identity.provider`,
+`identity.subject`, `identity.credential_id`, and `claims`. `claims` contains
+only verified claims selected by OIDC provider forwarding configuration.
+Conditions are compiled on create/update and fail closed on evaluation errors.
+Helper functions are available for common claim shapes: `hasAny(value,
+["accepted"])` and `hasToken(claims.scope, "scope-name")`.
 
 ## Resource
 

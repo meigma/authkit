@@ -79,9 +79,10 @@ the core authorization path is the resolved principal plus an action, resource,
 and caller-supplied facts.
 
 Trusted OIDC provider configuration controls which verified claims are exposed
-through `authkit.Identity.Claims`. A provisioning rule can reference only
-claims that provider configuration exposes. If a token omits an exposed claim,
-the rule simply does not match.
+through `authkit.Identity.Claims`. Provisioning rules evaluate CEL conditions
+only over that forwarded claim set plus provider, subject, and credential ID.
+If a token omits a forwarded claim or condition evaluation fails, the rule does
+not match.
 
 Facts are decision-time context. authkit does not automatically inject HTTP
 request data, token claims, or provider-specific groups into authorization

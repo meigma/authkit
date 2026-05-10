@@ -120,10 +120,10 @@ func TestMigrateCreatesSchema(t *testing.T) {
 	}
 
 	var migrationRows int
-	err := pool.QueryRow(ctx, `select count(*) from authkit_schema_migrations where version in (1, 2, 3, 4)`).
+	err := pool.QueryRow(ctx, `select count(*) from authkit_schema_migrations where version in (1, 2, 3, 4, 5)`).
 		Scan(&migrationRows)
 	require.NoError(t, err)
-	assert.Equal(t, 4, migrationRows)
+	assert.Equal(t, 5, migrationRows)
 }
 
 func TestMigrateConcurrentCalls(t *testing.T) {
@@ -148,10 +148,10 @@ func TestMigrateConcurrentCalls(t *testing.T) {
 	}
 
 	var migrationRows int
-	err := pool.QueryRow(ctx, `select count(*) from authkit_schema_migrations where version in (1, 2, 3, 4)`).
+	err := pool.QueryRow(ctx, `select count(*) from authkit_schema_migrations where version in (1, 2, 3, 4, 5)`).
 		Scan(&migrationRows)
 	require.NoError(t, err)
-	assert.Equal(t, 4, migrationRows)
+	assert.Equal(t, 5, migrationRows)
 }
 
 func newPostgresPool(t *testing.T) *pgxpool.Pool {

@@ -291,25 +291,23 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 		require.NoError(t, err)
 		assert.Equal(t, authkit.ProvisioningRule(req), rule)
 
-		req.Values[0] = "/changed"
 		req.AssignRoleIDs[0] = "changed"
-		rule.Values[0] = "/changed-from-returned"
 		rule.AssignRoleIDs[0] = "changed-from-returned"
 
 		found, err := store.FindProvisioningRule(context.Background(), testProvisioningRuleID)
 		require.NoError(t, err)
-		assert.Equal(t, []string{"/engineering"}, found.Values)
+		assert.Equal(t, `hasAny(claims.groups, ["/engineering"])`, found.Condition)
 		assert.Equal(t, []string{testRoleID}, found.AssignRoleIDs)
 
 		listed, err := store.ListProvisioningRules(context.Background())
 		require.NoError(t, err)
 		assert.Equal(t, []authkit.ProvisioningRule{found}, listed)
 
-		found.Values[0] = "/changed-from-found"
+		found.Condition = "false"
 		listed[0].AssignRoleIDs[0] = "changed-from-list"
 		foundAgain, err := store.FindProvisioningRule(context.Background(), testProvisioningRuleID)
 		require.NoError(t, err)
-		assert.Equal(t, []string{"/engineering"}, foundAgain.Values)
+		assert.Equal(t, `hasAny(claims.groups, ["/engineering"])`, foundAgain.Condition)
 		assert.Equal(t, []string{testRoleID}, foundAgain.AssignRoleIDs)
 	})
 
@@ -325,8 +323,7 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 			ID:            testProvisioningRuleID,
 			DisplayName:   "Platform writers",
 			Provider:      providerFixture().Issuer,
-			ClaimPath:     authkit.ClaimPath{"realm_access", "roles"},
-			Values:        []string{"writer"},
+			Condition:     `hasAny(claims.realm_access.roles, ["writer"])`,
 			AssignRoleIDs: []string{"notes-writer"},
 			Enabled:       false,
 		}
@@ -346,8 +343,7 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 		_, err = store.UpdateProvisioningRule(context.Background(), authkit.UpdateProvisioningRuleRequest{
 			ID:            testProvisioningRuleID,
 			Provider:      "https://untrusted.example",
-			ClaimPath:     authkit.ClaimPath{"missing"},
-			Values:        []string{"missing"},
+			Condition:     `claims.missing == "missing"`,
 			AssignRoleIDs: []string{"missing"},
 			Enabled:       true,
 		})
@@ -382,19 +378,28 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 				}(),
 			},
 			{
-				name: "claim not forwarded",
+				name: "missing condition",
 				req: func() authkit.CreateProvisioningRuleRequest {
 					req := provisioningRuleRequest()
-					req.ClaimPath = authkit.ClaimPath{"department"}
+					req.Condition = ""
 
 					return req
 				}(),
 			},
 			{
-				name: "missing values",
+				name: "syntax error",
 				req: func() authkit.CreateProvisioningRuleRequest {
 					req := provisioningRuleRequest()
-					req.Values = nil
+					req.Condition = "claims.groups =="
+
+					return req
+				}(),
+			},
+			{
+				name: "non-bool condition",
+				req: func() authkit.CreateProvisioningRuleRequest {
+					req := provisioningRuleRequest()
+					req.Condition = "identity.subject"
 
 					return req
 				}(),
@@ -1210,8 +1215,7 @@ func provisioningRuleRequest() authkit.CreateProvisioningRuleRequest {
 		ID:            testProvisioningRuleID,
 		DisplayName:   "Engineering readers",
 		Provider:      providerFixture().Issuer,
-		ClaimPath:     authkit.ClaimPath{"groups"},
-		Values:        []string{"/engineering"},
+		Condition:     `hasAny(claims.groups, ["/engineering"])`,
 		AssignRoleIDs: []string{testRoleID},
 		Enabled:       true,
 	}

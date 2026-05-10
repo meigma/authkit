@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -13,6 +12,7 @@ import (
 	"github.com/meigma/authkit"
 	"github.com/meigma/authkit/apikey"
 	"github.com/meigma/authkit/oidc"
+	"github.com/meigma/authkit/provisioning"
 )
 
 const principalIDPrefix = "principal_"
@@ -542,17 +542,10 @@ func (s *Store) validateProvisioningRuleLocked(rule authkit.ProvisioningRule) er
 	if rule.Provider == "" {
 		return errors.New("memory: provisioning rule provider is required")
 	}
-	provider, ok := s.providers[rule.Provider]
-	if !ok {
+	if _, ok := s.providers[rule.Provider]; !ok {
 		return fmt.Errorf("memory: provider %q is not trusted", rule.Provider)
 	}
-	if !rule.ClaimPath.Valid() {
-		return errors.New("memory: provisioning rule claim path is required")
-	}
-	if !providerForwardsClaim(provider, rule.ClaimPath) {
-		return fmt.Errorf("memory: provider %q does not forward claim path", rule.Provider)
-	}
-	if err := validateRequiredStrings("provisioning rule value", rule.Values); err != nil {
+	if err := provisioning.ValidateCondition(rule.Condition); err != nil {
 		return fmt.Errorf("memory: %w", err)
 	}
 	if err := validateRequiredStrings("provisioning rule role ID", rule.AssignRoleIDs); err != nil {
@@ -580,19 +573,12 @@ func (s *Store) validateInitialRolesLocked(roleIDs []string) error {
 	return nil
 }
 
-func providerForwardsClaim(provider oidc.Provider, path authkit.ClaimPath) bool {
-	return slices.ContainsFunc(provider.ForwardedClaims, func(candidate authkit.ClaimPath) bool {
-		return slices.Equal(candidate, path)
-	})
-}
-
 func provisioningRuleFromCreate(req authkit.CreateProvisioningRuleRequest) authkit.ProvisioningRule {
 	return authkit.ProvisioningRule{
 		ID:            req.ID,
 		DisplayName:   req.DisplayName,
 		Provider:      req.Provider,
-		ClaimPath:     cloneClaimPath(req.ClaimPath),
-		Values:        cloneStrings(req.Values),
+		Condition:     provisioning.NormalizeCondition(req.Condition),
 		AssignRoleIDs: cloneStrings(req.AssignRoleIDs),
 		Enabled:       req.Enabled,
 	}
@@ -603,16 +589,13 @@ func provisioningRuleFromUpdate(req authkit.UpdateProvisioningRuleRequest) authk
 		ID:            req.ID,
 		DisplayName:   req.DisplayName,
 		Provider:      req.Provider,
-		ClaimPath:     cloneClaimPath(req.ClaimPath),
-		Values:        cloneStrings(req.Values),
+		Condition:     provisioning.NormalizeCondition(req.Condition),
 		AssignRoleIDs: cloneStrings(req.AssignRoleIDs),
 		Enabled:       req.Enabled,
 	}
 }
 
 func cloneProvisioningRule(rule authkit.ProvisioningRule) authkit.ProvisioningRule {
-	rule.ClaimPath = cloneClaimPath(rule.ClaimPath)
-	rule.Values = cloneStrings(rule.Values)
 	rule.AssignRoleIDs = cloneStrings(rule.AssignRoleIDs)
 
 	return rule
