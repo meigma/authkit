@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/meigma/authkit/compare/v0.2.0...v0.3.0) (2026-05-11)
+
+
+### Features
+
+* **management:** add auth admin read ports ([#39](https://github.com/meigma/authkit/issues/39)) ([1f724c4](https://github.com/meigma/authkit/commit/1f724c48fe85aea03831b5c70190d177f0feda00))
+
 ## [0.2.0](https://github.com/meigma/authkit/compare/v0.1.0...v0.2.0) (2026-05-10)
 
 
