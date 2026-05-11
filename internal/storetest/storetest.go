@@ -18,6 +18,8 @@ import (
 
 const (
 	concurrentProvisionAttempts = 8
+	listedTokenMetadataCount    = 2
+	secondTokenRevokeOffset     = 2 * time.Hour
 	testAction                  = "notes:read"
 	testProvider                = "oidc"
 	testProvisioningRuleID      = "engineering-readers"
@@ -131,7 +133,11 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 		})
 		assert.Equal(t, want, principals)
 
-		principals[0].Attributes["team"] = "changed from list"
+		for i := range principals {
+			if principals[i].ID == first.ID {
+				principals[i].Attributes["team"] = "changed from list"
+			}
+		}
 		foundAfterListMutation, err := store.FindPrincipal(context.Background(), first.ID)
 		require.NoError(t, err)
 		assert.Equal(t, "platform", foundAfterListMutation.Attributes["team"])
@@ -1298,13 +1304,13 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 		otherToken.ID = "token_3"
 		require.NoError(t, store.CreateToken(context.Background(), otherToken))
 		usedAt := now.Add(time.Hour)
-		revokedAt := now.Add(2 * time.Hour)
+		revokedAt := now.Add(secondTokenRevokeOffset)
 		require.NoError(t, store.UpdateTokenLastUsed(context.Background(), secondToken.ID, usedAt))
 		require.NoError(t, store.RevokeToken(context.Background(), secondToken.ID, revokedAt))
 
 		tokens, err := store.ListPrincipalTokenMetadata(context.Background(), first.ID)
 		require.NoError(t, err)
-		require.Len(t, tokens, 2)
+		require.Len(t, tokens, listedTokenMetadataCount)
 		assert.Equal(t, apikey.TokenMetadata{
 			ID:          firstToken.ID,
 			PrincipalID: first.ID,
@@ -1324,7 +1330,7 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 		*tokens[1].RevokedAt = now
 		listedAgain, err := store.ListPrincipalTokenMetadata(context.Background(), first.ID)
 		require.NoError(t, err)
-		require.Len(t, listedAgain, 2)
+		require.Len(t, listedAgain, listedTokenMetadataCount)
 		require.NotNil(t, listedAgain[1].LastUsedAt)
 		require.NotNil(t, listedAgain[1].RevokedAt)
 		assert.Equal(t, usedAt, *listedAgain[1].LastUsedAt)
