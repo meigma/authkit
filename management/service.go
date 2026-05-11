@@ -23,6 +23,12 @@ type Options struct {
 	// PrincipalCreator creates internal principals.
 	PrincipalCreator authkit.PrincipalCreator
 
+	// PrincipalFinder finds internal principals.
+	PrincipalFinder authkit.PrincipalFinder
+
+	// PrincipalLister lists internal principals.
+	PrincipalLister authkit.PrincipalLister
+
 	// RoleCreator creates local roles.
 	RoleCreator authkit.RoleCreator
 
@@ -31,6 +37,12 @@ type Options struct {
 
 	// PrincipalRoleAssigner assigns principals to roles.
 	PrincipalRoleAssigner authkit.PrincipalRoleAssigner
+
+	// PrincipalRoleUnassigner removes principals from roles.
+	PrincipalRoleUnassigner authkit.PrincipalRoleUnassigner
+
+	// PrincipalRoleAssignmentLister lists role assignments for principals.
+	PrincipalRoleAssignmentLister authkit.PrincipalRoleAssignmentLister
 
 	// ProvisioningRuleCreator creates provisioning rules.
 	ProvisioningRuleCreator authkit.ProvisioningRuleCreator
@@ -52,14 +64,21 @@ type Options struct {
 
 	// APITokens issues and revokes API tokens.
 	APITokens APITokens
+
+	// APITokenMetadataLister lists API-token metadata.
+	APITokenMetadataLister apikey.TokenMetadataLister
 }
 
 // Service composes common authkit management operations.
 type Service struct {
 	principalCreator        authkit.PrincipalCreator
+	principalFinder         authkit.PrincipalFinder
+	principalLister         authkit.PrincipalLister
 	roleCreator             authkit.RoleCreator
 	roleActionGranter       authkit.RoleActionGranter
 	principalRoleAssigner   authkit.PrincipalRoleAssigner
+	principalRoleUnassigner authkit.PrincipalRoleUnassigner
+	roleAssignmentLister    authkit.PrincipalRoleAssignmentLister
 	provisioningRuleCreator authkit.ProvisioningRuleCreator
 	provisioningRuleUpdater authkit.ProvisioningRuleUpdater
 	provisioningRuleDeleter authkit.ProvisioningRuleDeleter
@@ -67,15 +86,20 @@ type Service struct {
 	provisioningRuleLister  authkit.ProvisioningRuleLister
 	identityLinker          authkit.IdentityLinker
 	apiTokens               APITokens
+	apiTokenMetadataLister  apikey.TokenMetadataLister
 }
 
 // NewService constructs a management service from opts.
 func NewService(opts Options) *Service {
 	return &Service{
 		principalCreator:        opts.PrincipalCreator,
+		principalFinder:         opts.PrincipalFinder,
+		principalLister:         opts.PrincipalLister,
 		roleCreator:             opts.RoleCreator,
 		roleActionGranter:       opts.RoleActionGranter,
 		principalRoleAssigner:   opts.PrincipalRoleAssigner,
+		principalRoleUnassigner: opts.PrincipalRoleUnassigner,
+		roleAssignmentLister:    opts.PrincipalRoleAssignmentLister,
 		provisioningRuleCreator: opts.ProvisioningRuleCreator,
 		provisioningRuleUpdater: opts.ProvisioningRuleUpdater,
 		provisioningRuleDeleter: opts.ProvisioningRuleDeleter,
@@ -83,6 +107,7 @@ func NewService(opts Options) *Service {
 		provisioningRuleLister:  opts.ProvisioningRuleLister,
 		identityLinker:          opts.IdentityLinker,
 		apiTokens:               opts.APITokens,
+		apiTokenMetadataLister:  opts.APITokenMetadataLister,
 	}
 }
 
@@ -101,6 +126,34 @@ func (s *Service) CreatePrincipal(
 	}
 
 	return principal, nil
+}
+
+// FindPrincipal returns a principal by ID.
+func (s *Service) FindPrincipal(ctx context.Context, id string) (authkit.Principal, error) {
+	if s.principalFinder == nil {
+		return authkit.Principal{}, errors.New("management: principal finder is required")
+	}
+
+	principal, err := s.principalFinder.FindPrincipal(ctx, id)
+	if err != nil {
+		return authkit.Principal{}, fmt.Errorf("management: find principal: %w", err)
+	}
+
+	return principal, nil
+}
+
+// ListPrincipals returns principals.
+func (s *Service) ListPrincipals(ctx context.Context) ([]authkit.Principal, error) {
+	if s.principalLister == nil {
+		return nil, errors.New("management: principal lister is required")
+	}
+
+	principals, err := s.principalLister.ListPrincipals(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("management: list principals: %w", err)
+	}
+
+	return principals, nil
 }
 
 // CreateRole creates a local role.
@@ -144,6 +197,36 @@ func (s *Service) AssignPrincipalRole(ctx context.Context, req authkit.AssignPri
 	}
 
 	return nil
+}
+
+// UnassignPrincipalRole removes a principal from a local role.
+func (s *Service) UnassignPrincipalRole(ctx context.Context, req authkit.UnassignPrincipalRoleRequest) error {
+	if s.principalRoleUnassigner == nil {
+		return errors.New("management: principal role unassigner is required")
+	}
+
+	if err := s.principalRoleUnassigner.UnassignPrincipalRole(ctx, req); err != nil {
+		return fmt.Errorf("management: unassign principal role: %w", err)
+	}
+
+	return nil
+}
+
+// ListPrincipalRoleAssignments returns role assignments for a principal.
+func (s *Service) ListPrincipalRoleAssignments(
+	ctx context.Context,
+	principalID string,
+) ([]authkit.PrincipalRoleAssignment, error) {
+	if s.roleAssignmentLister == nil {
+		return nil, errors.New("management: principal role assignment lister is required")
+	}
+
+	assignments, err := s.roleAssignmentLister.ListPrincipalRoleAssignments(ctx, principalID)
+	if err != nil {
+		return nil, fmt.Errorf("management: list principal role assignments: %w", err)
+	}
+
+	return assignments, nil
 }
 
 // CreateProvisioningRule creates a provisioning rule.
@@ -282,4 +365,21 @@ func (s *Service) RevokeAPIToken(ctx context.Context, tokenID string) error {
 	}
 
 	return nil
+}
+
+// ListPrincipalAPITokenMetadata returns API-token metadata for a principal.
+func (s *Service) ListPrincipalAPITokenMetadata(
+	ctx context.Context,
+	principalID string,
+) ([]apikey.TokenMetadata, error) {
+	if s.apiTokenMetadataLister == nil {
+		return nil, errors.New("management: API token metadata lister is required")
+	}
+
+	tokens, err := s.apiTokenMetadataLister.ListPrincipalTokenMetadata(ctx, principalID)
+	if err != nil {
+		return nil, fmt.Errorf("management: list principal API token metadata: %w", err)
+	}
+
+	return tokens, nil
 }

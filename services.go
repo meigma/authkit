@@ -44,6 +44,15 @@ type AssignPrincipalRoleRequest struct {
 	RoleID string
 }
 
+// UnassignPrincipalRoleRequest describes a request to remove a principal from a role.
+type UnassignPrincipalRoleRequest struct {
+	// PrincipalID identifies the principal losing the role.
+	PrincipalID string
+
+	// RoleID identifies the role to remove from the principal.
+	RoleID string
+}
+
 // CreateProvisioningRuleRequest describes a request to create a provisioning rule.
 type CreateProvisioningRuleRequest struct {
 	// ID is the stable application-owned provisioning rule identifier.
@@ -128,6 +137,18 @@ type PrincipalCreator interface {
 	CreatePrincipal(ctx context.Context, req CreatePrincipalRequest) (Principal, error)
 }
 
+// PrincipalFinder finds internal principals.
+type PrincipalFinder interface {
+	// FindPrincipal returns the principal identified by id.
+	FindPrincipal(ctx context.Context, id string) (Principal, error)
+}
+
+// PrincipalLister lists internal principals.
+type PrincipalLister interface {
+	// ListPrincipals returns all principals.
+	ListPrincipals(ctx context.Context) ([]Principal, error)
+}
+
 // RoleCreator creates admin-managed local roles.
 type RoleCreator interface {
 	// CreateRole creates a local role from req.
@@ -144,6 +165,18 @@ type RoleActionGranter interface {
 type PrincipalRoleAssigner interface {
 	// AssignPrincipalRole assigns req.PrincipalID to req.RoleID.
 	AssignPrincipalRole(ctx context.Context, req AssignPrincipalRoleRequest) error
+}
+
+// PrincipalRoleUnassigner removes principals from roles.
+type PrincipalRoleUnassigner interface {
+	// UnassignPrincipalRole removes req.PrincipalID from req.RoleID.
+	UnassignPrincipalRole(ctx context.Context, req UnassignPrincipalRoleRequest) error
+}
+
+// PrincipalRoleAssignmentLister lists role assignments for principals.
+type PrincipalRoleAssignmentLister interface {
+	// ListPrincipalRoleAssignments returns all role assignments for principalID.
+	ListPrincipalRoleAssignments(ctx context.Context, principalID string) ([]PrincipalRoleAssignment, error)
 }
 
 // PrincipalActionResolver resolves effective authorization actions for principals.

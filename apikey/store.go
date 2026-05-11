@@ -19,3 +19,9 @@ type TokenStore interface {
 	// RevokeToken records tokenID as revoked.
 	RevokeToken(ctx context.Context, tokenID string, revokedAt time.Time) error
 }
+
+// TokenMetadataLister lists token metadata without secret material.
+type TokenMetadataLister interface {
+	// ListPrincipalTokenMetadata returns API-token metadata for principalID.
+	ListPrincipalTokenMetadata(ctx context.Context, principalID string) ([]TokenMetadata, error)
+}

@@ -77,6 +77,64 @@ func (s *Store) CreatePrincipal(
 	return createPrincipal(ctx, s.pool, req)
 }
 
+// FindPrincipal returns a principal by ID.
+func (s *Store) FindPrincipal(ctx context.Context, id string) (authkit.Principal, error) {
+	if err := ctx.Err(); err != nil {
+		return authkit.Principal{}, err
+	}
+	if id == "" {
+		return authkit.Principal{}, errors.New("postgres: principal ID is required")
+	}
+
+	principal, err := scanPrincipal(s.pool.QueryRow(
+		ctx,
+		`select id, kind, display_name, coalesce(attributes::text, '')
+		from authkit_principals
+		where id = $1`,
+		id,
+	))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return authkit.Principal{}, authkit.ErrPrincipalNotFound
+	}
+	if err != nil {
+		return authkit.Principal{}, err
+	}
+
+	return principal, nil
+}
+
+// ListPrincipals returns all principals sorted by ID.
+func (s *Store) ListPrincipals(ctx context.Context) ([]authkit.Principal, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.pool.Query(
+		ctx,
+		`select id, kind, display_name, coalesce(attributes::text, '')
+		from authkit_principals
+		order by id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: list principals: %w", err)
+	}
+	defer rows.Close()
+
+	var principals []authkit.Principal
+	for rows.Next() {
+		principal, scanErr := scanPrincipal(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		principals = append(principals, principal)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: read principals: %w", err)
+	}
+
+	return principals, nil
+}
+
 // CreateRole creates a local role in PostgreSQL.
 func (s *Store) CreateRole(ctx context.Context, req authkit.CreateRoleRequest) (authkit.Role, error) {
 	if err := ctx.Err(); err != nil {
@@ -167,6 +225,93 @@ func (s *Store) AssignPrincipalRole(ctx context.Context, req authkit.AssignPrinc
 	}
 
 	return nil
+}
+
+// UnassignPrincipalRole removes a principal from a local role.
+func (s *Store) UnassignPrincipalRole(ctx context.Context, req authkit.UnassignPrincipalRoleRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if req.PrincipalID == "" {
+		return errors.New("postgres: principal ID is required")
+	}
+	if req.RoleID == "" {
+		return errors.New("postgres: role ID is required")
+	}
+
+	exists, err := s.principalExists(ctx, req.PrincipalID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return authkit.ErrPrincipalNotFound
+	}
+	roleExists, err := s.roleExists(ctx, req.RoleID)
+	if err != nil {
+		return err
+	}
+	if !roleExists {
+		return fmt.Errorf("postgres: role %q does not exist", req.RoleID)
+	}
+
+	if _, err := s.pool.Exec(
+		ctx,
+		`delete from authkit_principal_roles where principal_id = $1 and role_id = $2`,
+		req.PrincipalID,
+		req.RoleID,
+	); err != nil {
+		return fmt.Errorf("postgres: unassign principal role: %w", err)
+	}
+
+	return nil
+}
+
+// ListPrincipalRoleAssignments returns role assignments for a principal.
+func (s *Store) ListPrincipalRoleAssignments(
+	ctx context.Context,
+	principalID string,
+) ([]authkit.PrincipalRoleAssignment, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if principalID == "" {
+		return nil, errors.New("postgres: principal ID is required")
+	}
+
+	exists, err := s.principalExists(ctx, principalID)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, authkit.ErrPrincipalNotFound
+	}
+
+	rows, err := s.pool.Query(
+		ctx,
+		`select principal_id, role_id
+		from authkit_principal_roles
+		where principal_id = $1
+		order by role_id`,
+		principalID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: list principal role assignments: %w", err)
+	}
+	defer rows.Close()
+
+	var assignments []authkit.PrincipalRoleAssignment
+	for rows.Next() {
+		var assignment authkit.PrincipalRoleAssignment
+		if err := rows.Scan(&assignment.PrincipalID, &assignment.RoleID); err != nil {
+			return nil, fmt.Errorf("postgres: scan principal role assignment: %w", err)
+		}
+		assignments = append(assignments, assignment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: read principal role assignments: %w", err)
+	}
+
+	return assignments, nil
 }
 
 // ResolvePrincipalActions returns the distinct actions granted to principalID through roles.
@@ -725,6 +870,54 @@ func (s *Store) RevokeToken(ctx context.Context, tokenID string, revokedAt time.
 	return nil
 }
 
+// ListPrincipalTokenMetadata returns API-token metadata for principalID.
+func (s *Store) ListPrincipalTokenMetadata(
+	ctx context.Context,
+	principalID string,
+) ([]apikey.TokenMetadata, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if principalID == "" {
+		return nil, errors.New("postgres: principal ID is required")
+	}
+
+	exists, err := s.principalExists(ctx, principalID)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, authkit.ErrPrincipalNotFound
+	}
+
+	rows, err := s.pool.Query(
+		ctx,
+		`select id, principal_id, name, expires_at, last_used_at, revoked_at
+		from authkit_api_tokens
+		where principal_id = $1
+		order by id`,
+		principalID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: list principal API token metadata: %w", err)
+	}
+	defer rows.Close()
+
+	var tokens []apikey.TokenMetadata
+	for rows.Next() {
+		token, scanErr := scanTokenMetadata(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		tokens = append(tokens, token)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: read principal API token metadata: %w", err)
+	}
+
+	return tokens, nil
+}
+
 // TrustProvider stores provider as trusted for its issuer.
 func (s *Store) TrustProvider(ctx context.Context, provider oidc.Provider) (oidc.Provider, error) {
 	if err := ctx.Err(); err != nil {
@@ -837,6 +1030,37 @@ func (s *Store) principalExists(ctx context.Context, principalID string) (bool, 
 	}
 
 	return exists, nil
+}
+
+func (s *Store) roleExists(ctx context.Context, roleID string) (bool, error) {
+	var exists bool
+	if err := s.pool.QueryRow(
+		ctx,
+		`select exists(select 1 from authkit_roles where id = $1)`,
+		roleID,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("postgres: find role: %w", err)
+	}
+
+	return exists, nil
+}
+
+func scanPrincipal(row scanner) (authkit.Principal, error) {
+	var principal authkit.Principal
+	var kind string
+	var attributes string
+	if err := row.Scan(&principal.ID, &kind, &principal.DisplayName, &attributes); err != nil {
+		return authkit.Principal{}, err
+	}
+
+	principal.Kind = authkit.PrincipalKind(kind)
+	attrs, err := decodeAttributes(attributes)
+	if err != nil {
+		return authkit.Principal{}, err
+	}
+	principal.Attributes = attrs
+
+	return principal, nil
 }
 
 func findProvisionedIdentity(
@@ -1125,6 +1349,28 @@ func (s *Store) findToken(ctx context.Context, tokenID string) (apikey.StoredTok
 	}
 
 	copy(token.SecretHash[:], secretHash)
+	token.ExpiresAt = token.ExpiresAt.UTC()
+	token.LastUsedAt = timeFromTimestamptz(lastUsedAt)
+	token.RevokedAt = timeFromTimestamptz(revokedAt)
+
+	return token, nil
+}
+
+func scanTokenMetadata(row scanner) (apikey.TokenMetadata, error) {
+	var token apikey.TokenMetadata
+	var lastUsedAt pgtype.Timestamptz
+	var revokedAt pgtype.Timestamptz
+	if err := row.Scan(
+		&token.ID,
+		&token.PrincipalID,
+		&token.Name,
+		&token.ExpiresAt,
+		&lastUsedAt,
+		&revokedAt,
+	); err != nil {
+		return apikey.TokenMetadata{}, err
+	}
+
 	token.ExpiresAt = token.ExpiresAt.UTC()
 	token.LastUsedAt = timeFromTimestamptz(lastUsedAt)
 	token.RevokedAt = timeFromTimestamptz(revokedAt)

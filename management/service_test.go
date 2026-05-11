@@ -98,6 +98,24 @@ func TestServiceCoreMethodsRequirePorts(t *testing.T) {
 			want: "management: identity linker is required",
 		},
 		{
+			name: "find principal",
+			run: func() error {
+				_, err := service.FindPrincipal(context.Background(), testPrincipalID)
+
+				return err
+			},
+			want: "management: principal finder is required",
+		},
+		{
+			name: "list principals",
+			run: func() error {
+				_, err := service.ListPrincipals(context.Background())
+
+				return err
+			},
+			want: "management: principal lister is required",
+		},
+		{
 			name: "issue API token missing API token service",
 			run: func() error {
 				_, err := service.IssueAPIToken(context.Background(), management.IssueAPITokenRequest{
@@ -115,6 +133,15 @@ func TestServiceCoreMethodsRequirePorts(t *testing.T) {
 				return service.RevokeAPIToken(context.Background(), testTokenID)
 			},
 			want: "management: API tokens service is required",
+		},
+		{
+			name: "list API token metadata",
+			run: func() error {
+				_, err := service.ListPrincipalAPITokenMetadata(context.Background(), testPrincipalID)
+
+				return err
+			},
+			want: "management: API token metadata lister is required",
 		},
 	}
 
@@ -162,6 +189,30 @@ func TestServiceCreatePrincipal(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, creator.principal, principal)
 	assert.Equal(t, []authkit.CreatePrincipalRequest{req}, creator.requests)
+}
+
+func TestServiceFindAndListPrincipals(t *testing.T) {
+	principals := newFakePrincipalCreator()
+	principals.principal = authkit.Principal{
+		ID:          testPrincipalID,
+		Kind:        authkit.PrincipalKindService,
+		DisplayName: testPrincipalName,
+	}
+	principals.principals = []authkit.Principal{principals.principal}
+	service := management.NewService(management.Options{
+		PrincipalFinder: principals,
+		PrincipalLister: principals,
+	})
+
+	found, err := service.FindPrincipal(context.Background(), testPrincipalID)
+	require.NoError(t, err)
+	assert.Equal(t, principals.principal, found)
+	assert.Equal(t, []string{testPrincipalID}, principals.findIDs)
+
+	listed, err := service.ListPrincipals(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, principals.principals, listed)
+	assert.Equal(t, 1, principals.listCalls)
 }
 
 func TestNewServiceDoesNotRequireRolePorts(t *testing.T) {
@@ -231,6 +282,34 @@ func TestServiceAssignPrincipalRole(t *testing.T) {
 	assert.Equal(t, []authkit.AssignPrincipalRoleRequest{req}, roles.assignRequests)
 }
 
+func TestServiceUnassignPrincipalRole(t *testing.T) {
+	roles := newFakeRoleStore()
+	service := newServiceWithRoles(t, newFakePrincipalCreator(), roles, newFakeIdentityLinker(), newFakeAPITokens())
+	req := authkit.UnassignPrincipalRoleRequest{
+		PrincipalID: testPrincipalID,
+		RoleID:      "notes-reader",
+	}
+
+	err := service.UnassignPrincipalRole(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, []authkit.UnassignPrincipalRoleRequest{req}, roles.unassignRequests)
+}
+
+func TestServiceListPrincipalRoleAssignments(t *testing.T) {
+	roles := newFakeRoleStore()
+	roles.assignments = []authkit.PrincipalRoleAssignment{
+		{PrincipalID: testPrincipalID, RoleID: "notes-reader"},
+	}
+	service := newServiceWithRoles(t, newFakePrincipalCreator(), roles, newFakeIdentityLinker(), newFakeAPITokens())
+
+	assignments, err := service.ListPrincipalRoleAssignments(context.Background(), testPrincipalID)
+
+	require.NoError(t, err)
+	assert.Equal(t, roles.assignments, assignments)
+	assert.Equal(t, []string{testPrincipalID}, roles.listPrincipalIDs)
+}
+
 func TestServiceWrapsRoleErrors(t *testing.T) {
 	roleErr := errors.New("role failed")
 
@@ -262,6 +341,23 @@ func TestServiceWrapsRoleErrors(t *testing.T) {
 					PrincipalID: testPrincipalID,
 					RoleID:      "notes-reader",
 				})
+			},
+		},
+		{
+			name: "unassign principal role",
+			run: func(service *management.Service) error {
+				return service.UnassignPrincipalRole(context.Background(), authkit.UnassignPrincipalRoleRequest{
+					PrincipalID: testPrincipalID,
+					RoleID:      "notes-reader",
+				})
+			},
+		},
+		{
+			name: "list principal role assignments",
+			run: func(service *management.Service) error {
+				_, err := service.ListPrincipalRoleAssignments(context.Background(), testPrincipalID)
+
+				return err
 			},
 		},
 	}
@@ -320,6 +416,23 @@ func TestServiceRoleMethodsRequireRolePorts(t *testing.T) {
 					PrincipalID: testPrincipalID,
 					RoleID:      "notes-reader",
 				})
+			},
+		},
+		{
+			name: "unassign principal role",
+			run: func() error {
+				return service.UnassignPrincipalRole(context.Background(), authkit.UnassignPrincipalRoleRequest{
+					PrincipalID: testPrincipalID,
+					RoleID:      "notes-reader",
+				})
+			},
+		},
+		{
+			name: "list principal role assignments",
+			run: func() error {
+				_, runErr := service.ListPrincipalRoleAssignments(context.Background(), testPrincipalID)
+
+				return runErr
 			},
 		},
 	}
@@ -640,6 +753,25 @@ func TestServiceRevokeAPITokenReturnsError(t *testing.T) {
 	require.ErrorIs(t, err, revokeErr)
 }
 
+func TestServiceListPrincipalAPITokenMetadata(t *testing.T) {
+	apiTokens := newFakeAPITokens()
+	apiTokens.metadata = []apikey.TokenMetadata{{
+		ID:          testTokenID,
+		PrincipalID: testPrincipalID,
+		Name:        testTokenName,
+		ExpiresAt:   fixedTime().Add(time.Hour),
+	}}
+	service := management.NewService(management.Options{
+		APITokenMetadataLister: apiTokens,
+	})
+
+	tokens, err := service.ListPrincipalAPITokenMetadata(context.Background(), testPrincipalID)
+
+	require.NoError(t, err)
+	assert.Equal(t, apiTokens.metadata, tokens)
+	assert.Equal(t, []string{testPrincipalID}, apiTokens.metadataPrincipalIDs)
+}
+
 func TestServicePropagatesContextCancellation(t *testing.T) {
 	now := fixedTime()
 	store := memory.NewStore()
@@ -670,6 +802,22 @@ func TestServicePropagatesContextCancellation(t *testing.T) {
 				_, runErr := service.CreatePrincipal(ctx, authkit.CreatePrincipalRequest{
 					Kind: authkit.PrincipalKindService,
 				})
+
+				return runErr
+			},
+		},
+		{
+			name: "find principal",
+			run: func() error {
+				_, runErr := service.FindPrincipal(ctx, principal.ID)
+
+				return runErr
+			},
+		},
+		{
+			name: "list principals",
+			run: func() error {
+				_, runErr := service.ListPrincipals(ctx)
 
 				return runErr
 			},
@@ -708,6 +856,23 @@ func TestServicePropagatesContextCancellation(t *testing.T) {
 					PrincipalID: principal.ID,
 					RoleID:      "notes-reader",
 				})
+			},
+		},
+		{
+			name: "unassign principal role",
+			run: func() error {
+				return service.UnassignPrincipalRole(ctx, authkit.UnassignPrincipalRoleRequest{
+					PrincipalID: principal.ID,
+					RoleID:      "notes-reader",
+				})
+			},
+		},
+		{
+			name: "list principal role assignments",
+			run: func() error {
+				_, runErr := service.ListPrincipalRoleAssignments(ctx, principal.ID)
+
+				return runErr
 			},
 		},
 		{
@@ -763,6 +928,14 @@ func TestServicePropagatesContextCancellation(t *testing.T) {
 			name: "revoke API token",
 			run: func() error {
 				return service.RevokeAPIToken(ctx, token.ID)
+			},
+		},
+		{
+			name: "list API token metadata",
+			run: func() error {
+				_, runErr := service.ListPrincipalAPITokenMetadata(ctx, principal.ID)
+
+				return runErr
 			},
 		},
 	}
@@ -829,12 +1002,14 @@ func newServiceWithRoles(
 	t.Helper()
 
 	service := management.NewService(management.Options{
-		PrincipalCreator:      creator,
-		RoleCreator:           roles,
-		RoleActionGranter:     roles,
-		PrincipalRoleAssigner: roles,
-		IdentityLinker:        linker,
-		APITokens:             apiTokens,
+		PrincipalCreator:              creator,
+		RoleCreator:                   roles,
+		RoleActionGranter:             roles,
+		PrincipalRoleAssigner:         roles,
+		PrincipalRoleUnassigner:       roles,
+		PrincipalRoleAssignmentLister: roles,
+		IdentityLinker:                linker,
+		APITokens:                     apiTokens,
 	})
 
 	return service
@@ -851,17 +1026,19 @@ func newServiceWithProvisioningRules(
 	t.Helper()
 
 	service := management.NewService(management.Options{
-		PrincipalCreator:        creator,
-		RoleCreator:             roles,
-		RoleActionGranter:       roles,
-		PrincipalRoleAssigner:   roles,
-		ProvisioningRuleCreator: rules,
-		ProvisioningRuleUpdater: rules,
-		ProvisioningRuleDeleter: rules,
-		ProvisioningRuleFinder:  rules,
-		ProvisioningRuleLister:  rules,
-		IdentityLinker:          linker,
-		APITokens:               apiTokens,
+		PrincipalCreator:              creator,
+		RoleCreator:                   roles,
+		RoleActionGranter:             roles,
+		PrincipalRoleAssigner:         roles,
+		PrincipalRoleUnassigner:       roles,
+		PrincipalRoleAssignmentLister: roles,
+		ProvisioningRuleCreator:       rules,
+		ProvisioningRuleUpdater:       rules,
+		ProvisioningRuleDeleter:       rules,
+		ProvisioningRuleFinder:        rules,
+		ProvisioningRuleLister:        rules,
+		IdentityLinker:                linker,
+		APITokens:                     apiTokens,
 	})
 
 	return service
@@ -874,13 +1051,32 @@ func newManagementService(
 ) *management.Service {
 	t.Helper()
 
-	return newServiceWithProvisioningRules(t, store, store, store, store, tokenService)
+	return management.NewService(management.Options{
+		PrincipalCreator:              store,
+		PrincipalFinder:               store,
+		PrincipalLister:               store,
+		RoleCreator:                   store,
+		RoleActionGranter:             store,
+		PrincipalRoleAssigner:         store,
+		PrincipalRoleUnassigner:       store,
+		PrincipalRoleAssignmentLister: store,
+		ProvisioningRuleCreator:       store,
+		ProvisioningRuleUpdater:       store,
+		ProvisioningRuleDeleter:       store,
+		ProvisioningRuleFinder:        store,
+		ProvisioningRuleLister:        store,
+		IdentityLinker:                store,
+		APITokens:                     tokenService,
+		APITokenMetadataLister:        store,
+	})
 }
 
 type roleStore interface {
 	authkit.RoleCreator
 	authkit.RoleActionGranter
 	authkit.PrincipalRoleAssigner
+	authkit.PrincipalRoleUnassigner
+	authkit.PrincipalRoleAssignmentLister
 }
 
 type provisioningRuleStore interface {
@@ -927,9 +1123,12 @@ func provisioningRule() authkit.ProvisioningRule {
 }
 
 type fakePrincipalCreator struct {
-	requests  []authkit.CreatePrincipalRequest
-	principal authkit.Principal
-	err       error
+	requests   []authkit.CreatePrincipalRequest
+	findIDs    []string
+	listCalls  int
+	principal  authkit.Principal
+	principals []authkit.Principal
+	err        error
 }
 
 func (f *fakePrincipalCreator) CreatePrincipal(
@@ -942,6 +1141,24 @@ func (f *fakePrincipalCreator) CreatePrincipal(
 	}
 
 	return f.principal, nil
+}
+
+func (f *fakePrincipalCreator) FindPrincipal(_ context.Context, id string) (authkit.Principal, error) {
+	f.findIDs = append(f.findIDs, id)
+	if f.err != nil {
+		return authkit.Principal{}, f.err
+	}
+
+	return f.principal, nil
+}
+
+func (f *fakePrincipalCreator) ListPrincipals(_ context.Context) ([]authkit.Principal, error) {
+	f.listCalls++
+	if f.err != nil {
+		return nil, f.err
+	}
+
+	return f.principals, nil
 }
 
 type fakeIdentityLinker struct {
@@ -963,11 +1180,14 @@ func (f *fakeIdentityLinker) LinkIdentity(
 }
 
 type fakeRoleStore struct {
-	createRequests []authkit.CreateRoleRequest
-	grantRequests  []authkit.GrantRoleActionRequest
-	assignRequests []authkit.AssignPrincipalRoleRequest
-	role           authkit.Role
-	err            error
+	createRequests   []authkit.CreateRoleRequest
+	grantRequests    []authkit.GrantRoleActionRequest
+	assignRequests   []authkit.AssignPrincipalRoleRequest
+	unassignRequests []authkit.UnassignPrincipalRoleRequest
+	listPrincipalIDs []string
+	role             authkit.Role
+	assignments      []authkit.PrincipalRoleAssignment
+	err              error
 }
 
 func (f *fakeRoleStore) CreateRole(
@@ -1004,6 +1224,30 @@ func (f *fakeRoleStore) AssignPrincipalRole(
 	}
 
 	return nil
+}
+
+func (f *fakeRoleStore) UnassignPrincipalRole(
+	_ context.Context,
+	req authkit.UnassignPrincipalRoleRequest,
+) error {
+	f.unassignRequests = append(f.unassignRequests, req)
+	if f.err != nil {
+		return f.err
+	}
+
+	return nil
+}
+
+func (f *fakeRoleStore) ListPrincipalRoleAssignments(
+	_ context.Context,
+	principalID string,
+) ([]authkit.PrincipalRoleAssignment, error) {
+	f.listPrincipalIDs = append(f.listPrincipalIDs, principalID)
+	if f.err != nil {
+		return nil, f.err
+	}
+
+	return f.assignments, nil
 }
 
 type fakeProvisioningRuleStore struct {
@@ -1073,11 +1317,14 @@ func (f *fakeProvisioningRuleStore) ListProvisioningRules(
 }
 
 type fakeAPITokens struct {
-	issueRequests []apikey.IssueRequest
-	issued        apikey.IssuedToken
-	issueErr      error
-	revokedIDs    []string
-	revokeErr     error
+	issueRequests        []apikey.IssueRequest
+	issued               apikey.IssuedToken
+	issueErr             error
+	revokedIDs           []string
+	revokeErr            error
+	metadataPrincipalIDs []string
+	metadata             []apikey.TokenMetadata
+	metadataErr          error
 }
 
 func (f *fakeAPITokens) IssueToken(
@@ -1099,4 +1346,16 @@ func (f *fakeAPITokens) RevokeToken(_ context.Context, tokenID string) error {
 	}
 
 	return nil
+}
+
+func (f *fakeAPITokens) ListPrincipalTokenMetadata(
+	_ context.Context,
+	principalID string,
+) ([]apikey.TokenMetadata, error) {
+	f.metadataPrincipalIDs = append(f.metadataPrincipalIDs, principalID)
+	if f.metadataErr != nil {
+		return nil, f.metadataErr
+	}
+
+	return f.metadata, nil
 }

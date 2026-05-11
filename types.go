@@ -53,6 +53,15 @@ type Role struct {
 	Description string
 }
 
+// PrincipalRoleAssignment describes one local role assigned to a principal.
+type PrincipalRoleAssignment struct {
+	// PrincipalID identifies the principal receiving the role.
+	PrincipalID string
+
+	// RoleID identifies the assigned role.
+	RoleID string
+}
+
 // ProvisioningRule describes an admin-managed rule for initial role assignment.
 type ProvisioningRule struct {
 	// ID is the stable application-owned provisioning rule identifier.
