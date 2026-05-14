@@ -6,7 +6,7 @@ description: Use compose.NewHTTP to wire authkit for a net/http API service.
 # How To Compose HTTP Authentication
 
 Use `compose.NewHTTP` when you want the standard `net/http` path with less
-boilerplate. The helper builds authenticators, an `authkit.Pipeline`, and
+boilerplate. The helper builds principal authenticators, an `authkit.Pipeline`, and
 `httpauth.Middleware`; your application still owns storage, provider trust,
 local role or Casbin policy setup, and management workflows.
 

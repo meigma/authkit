@@ -10,14 +10,8 @@ import (
 
 // HTTPOptions configures HTTP auth composition.
 type HTTPOptions struct {
-	// PrincipalAuthenticators are built and tried before identity authenticators.
+	// PrincipalAuthenticators are built and tried in order.
 	PrincipalAuthenticators []PrincipalAuthenticatorSpec
-
-	// Authenticators are built and tried in order.
-	Authenticators []AuthenticatorSpec
-
-	// Resolver maps authenticated identities to internal principals.
-	Resolver authkit.PrincipalResolver
 
 	// Authorizer decides whether resolved principals may act on resources.
 	Authorizer authkit.Authorizer
@@ -41,18 +35,12 @@ func NewHTTP(opts HTTPOptions) (*HTTP, error) {
 	if err != nil {
 		return nil, err
 	}
-	authenticators, err := buildAuthenticators(opts.Authenticators)
-	if err != nil {
-		return nil, err
-	}
-	if len(principalAuthenticators) == 0 && len(authenticators) == 0 {
-		return nil, errors.New("compose: at least one authenticator is required")
+	if len(principalAuthenticators) == 0 {
+		return nil, errors.New("compose: at least one principal authenticator is required")
 	}
 
 	pipeline, err := authkit.NewPipeline(authkit.PipelineOptions{
 		PrincipalAuthenticators: principalAuthenticators,
-		Authenticators:          authenticators,
-		Resolver:                opts.Resolver,
 		Authorizer:              opts.Authorizer,
 	})
 	if err != nil {
@@ -85,27 +73,6 @@ func buildPrincipalAuthenticators(
 		}
 		if authenticator == nil {
 			return nil, fmt.Errorf("compose: principal authenticator %d built nil authenticator", i)
-		}
-
-		authenticators = append(authenticators, authenticator)
-	}
-
-	return authenticators, nil
-}
-
-func buildAuthenticators(specs []AuthenticatorSpec) ([]authkit.Authenticator, error) {
-	authenticators := make([]authkit.Authenticator, 0, len(specs))
-	for i, spec := range specs {
-		if spec == nil {
-			return nil, fmt.Errorf("compose: authenticator spec %d is required", i)
-		}
-
-		authenticator, err := spec.BuildAuthenticator()
-		if err != nil {
-			return nil, fmt.Errorf("compose: build authenticator %d: %w", i, err)
-		}
-		if authenticator == nil {
-			return nil, fmt.Errorf("compose: authenticator %d built nil authenticator", i)
 		}
 
 		authenticators = append(authenticators, authenticator)

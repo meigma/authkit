@@ -18,6 +18,8 @@ import (
 	"github.com/meigma/authkit/compose"
 	"github.com/meigma/authkit/exchange"
 	"github.com/meigma/authkit/httpauth"
+	"github.com/meigma/authkit/oidc"
+	"github.com/meigma/authkit/provisioning"
 )
 
 const (
@@ -44,12 +46,16 @@ const (
 	clearedAccessCookieAge = -1
 )
 
-// Store is the authkit storage surface testkit needs for API-token exchange.
+// Store is the authkit storage surface testkit needs for token exchange.
 type Store interface {
 	authkit.PrincipalCreator
 	authkit.PrincipalFinder
 	authkit.PrincipalLister
+	authkit.PrincipalResolver
+	authkit.IdentityProvisioner
+	authkit.ProvisioningRuleLister
 	apikey.TokenStore
+	oidc.ProviderSource
 }
 
 // Runtime contains the authkit components used by testkit HTTP handlers.
@@ -59,6 +65,12 @@ type Runtime struct {
 
 	// Exchanger exchanges opaque API tokens for authkit access JWTs.
 	Exchanger *exchange.APITokenExchanger
+
+	// IdentityExchanger exchanges verified identities for authkit access JWTs.
+	IdentityExchanger *exchange.IdentityExchanger
+
+	// OIDCVerifier verifies externally issued OIDC JWT bearer tokens.
+	OIDCVerifier *oidc.Verifier
 
 	// Principal is the bootstrap principal that owns the startup API token.
 	Principal authkit.Principal
@@ -71,7 +83,8 @@ type Runtime struct {
 }
 
 type options struct {
-	clock func() time.Time
+	clock       func() time.Time
+	oidcOptions []oidc.Option
 }
 
 // Option configures Runtime construction.
@@ -86,7 +99,14 @@ func WithClock(clock func() time.Time) Option {
 	}
 }
 
-// NewRuntime constructs the authkit API-token exchange runtime for testkit.
+// WithOIDCOptions configures OIDC token verification.
+func WithOIDCOptions(oidcOptions ...oidc.Option) Option {
+	return func(opts *options) {
+		opts.oidcOptions = cloneOIDCOptions(oidcOptions)
+	}
+}
+
+// NewRuntime constructs the authkit exchange runtime for testkit.
 func NewRuntime(ctx context.Context, store Store, opts ...Option) (*Runtime, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -128,6 +148,27 @@ func NewRuntime(ctx context.Context, store Store, opts ...Option) (*Runtime, err
 	if err != nil {
 		return nil, err
 	}
+	oidcOptions := append(cloneOIDCOptions(cfg.oidcOptions), oidc.WithClock(cfg.clock))
+	oidcVerifier, err := oidc.NewVerifier(store, oidcOptions...)
+	if err != nil {
+		return nil, fmt.Errorf("authflow: create OIDC verifier: %w", err)
+	}
+	identityResolver, err := provisioning.NewResolver(provisioning.ResolverOptions{
+		Resolver:    store,
+		Provisioner: store,
+		Factory:     principalFromIdentity,
+		RuleSource:  store,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("authflow: create identity exchange resolver: %w", err)
+	}
+	identityExchanger, err := exchange.NewIdentityExchanger(exchange.IdentityOptions{
+		Resolver:     identityResolver,
+		AccessTokens: accessIssuer,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("authflow: create identity exchanger: %w", err)
+	}
 	exchanger, err := exchange.NewAPITokenExchanger(exchange.APITokenOptions{
 		APITokens:    apiTokens,
 		Principals:   store,
@@ -152,6 +193,8 @@ func NewRuntime(ctx context.Context, store Store, opts ...Option) (*Runtime, err
 	return &Runtime{
 		Middleware:            composed.Middleware,
 		Exchanger:             exchanger,
+		IdentityExchanger:     identityExchanger,
+		OIDCVerifier:          oidcVerifier,
 		Principal:             principal,
 		SeedAPIToken:          seedToken.Plaintext,
 		SeedAPITokenExpiresAt: seedToken.ExpiresAt,
@@ -169,6 +212,25 @@ func (r *Runtime) ExchangeAPIToken(
 
 	return r.Exchanger.Exchange(ctx, exchange.APITokenRequest{
 		Plaintext: plaintext,
+	})
+}
+
+// ExchangeOIDCToken exchanges an OIDC JWT bearer token for an authkit access JWT.
+func (r *Runtime) ExchangeOIDCToken(
+	ctx context.Context,
+	plaintext string,
+) (exchange.IdentityResult, error) {
+	if r == nil || r.OIDCVerifier == nil || r.IdentityExchanger == nil {
+		return exchange.IdentityResult{}, errors.New("authflow: runtime OIDC exchange is required")
+	}
+
+	identity, err := r.OIDCVerifier.VerifyToken(ctx, plaintext)
+	if err != nil {
+		return exchange.IdentityResult{}, err
+	}
+
+	return r.IdentityExchanger.Exchange(ctx, exchange.IdentityRequest{
+		Identity: identity,
 	})
 }
 
@@ -225,6 +287,49 @@ func bootstrapPrincipal(ctx context.Context, store Store) (authkit.Principal, er
 	}
 
 	return principal, nil
+}
+
+func principalFromIdentity(
+	_ context.Context,
+	identity authkit.Identity,
+) (authkit.CreatePrincipalRequest, bool, error) {
+	displayName := stringClaim(identity.Claims, "name")
+	if displayName == "" {
+		displayName = stringClaim(identity.Claims, "email")
+	}
+	if displayName == "" {
+		displayName = identity.Subject
+	}
+
+	attributes := map[string]any{
+		"provider": identity.Provider,
+	}
+	if email := stringClaim(identity.Claims, "email"); email != "" {
+		attributes["email"] = email
+	}
+
+	return authkit.CreatePrincipalRequest{
+		Kind:        authkit.PrincipalKindUser,
+		DisplayName: displayName,
+		Attributes:  attributes,
+	}, true, nil
+}
+
+func stringClaim(claims map[string]any, name string) string {
+	value, _ := claims[name].(string)
+
+	return value
+}
+
+func cloneOIDCOptions(options []oidc.Option) []oidc.Option {
+	if len(options) == 0 {
+		return nil
+	}
+
+	cloned := make([]oidc.Option, len(options))
+	copy(cloned, options)
+
+	return cloned
 }
 
 func newAccessJWTIssuerAndVerifier(

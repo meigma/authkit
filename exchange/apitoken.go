@@ -72,7 +72,7 @@ func exchangeError(operation string, err error) error {
 	if isContextError(err) {
 		return err
 	}
-	if errors.Is(err, authkit.ErrUnauthenticated) {
+	if errors.Is(err, authkit.ErrUnauthenticated) || errors.Is(err, authkit.ErrUnresolvedIdentity) {
 		return err
 	}
 

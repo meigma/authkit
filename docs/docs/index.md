@@ -8,21 +8,21 @@ description: Documentation for the authkit Go authentication and authorization l
 
 authkit is a Go library for authentication and authorization in Web API
 services. It provides reusable authentication, principal resolution,
-authorization, HTTP middleware, and setup helpers without becoming an identity
-provider, hosted login system, or policy framework.
+authorization, token exchange, HTTP middleware, and setup helpers without
+becoming an identity provider, hosted login system, or policy framework.
 
 ## Start Here
 
-- [Learn authkit with the notes service](tutorials/notes-service.md) if you want
-  the shortest hands-on path through a working service.
+- [Learn authkit with the testkit pastebin](tutorials/testkit-pastebin.md) if
+  you want the shortest hands-on path through a working service.
 - [Compose HTTP authentication](how-to/compose-http-auth.md) if you are wiring a
   typical `net/http` API service.
 - [Use explicit composition](how-to/use-explicit-composition.md) if you need to
   construct authenticators, the pipeline, or middleware yourself.
 - [Configure local roles](how-to/configure-local-roles.md) if you need
   action-based role authorization.
-- [Auto-provision OIDC principals](how-to/auto-provision-oidc-principals.md) if
-  trusted JWT identities should create local principals on first use.
+- [Exchange OIDC tokens and auto-provision principals](how-to/auto-provision-oidc-principals.md)
+  if trusted JWT identities should become authkit access JWTs.
 - [Supply authorization facts](how-to/supply-authorization-facts.md) if route
   authorization needs request, tenant, or loaded resource context.
 

@@ -19,22 +19,6 @@ func AuthenticationFromContext(ctx context.Context) (authkit.Authentication, boo
 	return authentication, ok
 }
 
-// IdentityFromContext returns the authenticated identity stored in ctx.
-func IdentityFromContext(ctx context.Context) (authkit.Identity, bool) {
-	authentication, ok := AuthenticationFromContext(ctx)
-	if !ok {
-		return authkit.Identity{}, false
-	}
-	if authentication.Identity.Provider == "" &&
-		authentication.Identity.Subject == "" &&
-		authentication.Identity.CredentialID == "" &&
-		len(authentication.Identity.Claims) == 0 {
-		return authkit.Identity{}, false
-	}
-
-	return authentication.Identity, true
-}
-
 // PrincipalFromContext returns the resolved principal stored in ctx.
 func PrincipalFromContext(ctx context.Context) (authkit.Principal, bool) {
 	authentication, ok := AuthenticationFromContext(ctx)

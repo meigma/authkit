@@ -1,12 +1,22 @@
 ---
-title: How To Auto-Provision OIDC Principals
-description: Configure OIDC auto-provisioning and initial role assignment from forwarded claims.
+title: How To Exchange OIDC Tokens And Auto-Provision Principals
+description: Verify OIDC JWTs, provision approved identities, and issue authkit access JWTs.
 ---
 
-# How To Auto-Provision OIDC Principals
+# How To Exchange OIDC Tokens And Auto-Provision Principals
 
-Configure OIDC auto-provisioning when a trusted JWT bearer token should create a
-local principal on first use.
+Configure OIDC exchange when a trusted external JWT should become a short-lived
+authkit access JWT. OIDC tokens are proof material for an exchange route; they
+are not protected-resource credentials.
+
+The flow is:
+
+```text
+OIDC JWT -> oidc.Verifier -> authkit.Identity -> exchange.IdentityExchanger -> authkit access JWT
+```
+
+Protected resource routes should then accept the authkit access JWT with
+`accessjwtauth` or `compose.AccessJWT`.
 
 ## Prerequisites
 
@@ -14,7 +24,8 @@ local principal on first use.
 - A store that implements principal resolution, identity provisioning, provider
   trust, provisioning-rule, and local-role ports
 - Local roles already chosen for the initial access you want to grant
-- An application-owned approval rule for which identities may be provisioned
+- An application-owned exchange endpoint with appropriate CSRF, rate limiting,
+  response, audit, and browser/session behavior
 
 ## Trust The Provider With Forwarded Claims
 
@@ -24,10 +35,11 @@ forward into `authkit.Identity.Claims`:
 ```go
 provider, err := store.TrustProvider(ctx, oidc.Provider{
 	Issuer:    "https://issuer.example",
-	Audiences: []string{"notes-api"},
+	Audiences: []string{"pastebin"},
 	JWKSURL:   "https://issuer.example/.well-known/jwks.json",
 	ForwardedClaims: []authkit.ClaimPath{
 		{"email"},
+		{"name"},
 		{"groups"},
 	},
 })
@@ -38,39 +50,38 @@ if err != nil {
 
 Provisioning rules can reference only forwarded claim paths.
 
-## Create The Initial Role
+## Create Initial Roles And Rules
 
-Create a local role and grant the actions new principals should receive:
+Create local roles and grant the actions new principals should receive:
 
 ```go
 _, err = store.CreateRole(ctx, authkit.CreateRoleRequest{
-	ID:          "notes-reader",
-	DisplayName: "Notes reader",
+	ID:          "paste-author",
+	DisplayName: "Paste author",
 })
 if err != nil {
 	return err
 }
 
 err = store.GrantRoleAction(ctx, authkit.GrantRoleActionRequest{
-	RoleID: "notes-reader",
-	Action: "note:read",
+	RoleID: "paste-author",
+	Action: "paste:create",
 })
 if err != nil {
 	return err
 }
 ```
 
-## Create A Provisioning Rule
-
-Create a CEL-backed rule for the trusted provider and forwarded claims:
+Create a CEL-backed provisioning rule for the trusted provider and forwarded
+claims:
 
 ```go
 _, err = store.CreateProvisioningRule(ctx, authkit.CreateProvisioningRuleRequest{
-	ID:            "engineering-readers",
-	DisplayName:   "Engineering readers",
+	ID:            "engineering-authors",
+	DisplayName:   "Engineering authors",
 	Provider:      provider.Issuer,
 	Condition:     `hasAny(claims.groups, ["/engineering"])`,
-	AssignRoleIDs: []string{"notes-reader"},
+	AssignRoleIDs: []string{"paste-author"},
 	Enabled:       true,
 })
 if err != nil {
@@ -78,35 +89,28 @@ if err != nil {
 }
 ```
 
-Rules are compiled and type-checked when they are created or updated. The CEL
-environment is intentionally small:
-
-- `identity.provider`
-- `identity.subject`
-- `identity.credential_id`
-- `claims`, containing only verified claims forwarded by trusted provider
-  configuration
-
 Conditions must return `bool`. Evaluation errors, missing claims, disabled
-rules, and provider mismatches do not match. Two helpers cover common token
-shapes: `hasAny(value, ["accepted"])` for string or string-list claims and
-`hasToken(claims.scope, "scope-name")` for space-delimited OIDC scope strings.
+rules, and provider mismatches do not match. The CEL environment exposes
+`identity.provider`, `identity.subject`, `identity.credential_id`, and `claims`.
+Two helpers cover common token shapes: `hasAny(value, ["accepted"])` for string
+or string-list claims and `hasToken(claims.scope, "scope-name")` for
+space-delimited OIDC scope strings.
 
-## Build The OIDC Authenticator
+## Build The OIDC Verifier
 
 Use the trusted provider store as the OIDC source:
 
 ```go
-oidcAuthenticator, err := oidc.NewAuthenticator(store)
+verifier, err := oidc.NewVerifier(store)
 if err != nil {
 	return err
 }
 ```
 
-The authenticator verifies JWT bearer tokens and returns `authkit.Identity`
-values. It does not create principals.
+The verifier validates raw JWTs and returns `authkit.Identity` values. It does
+not create principals, issue access tokens, or authorize resource access.
 
-## Wrap Principal Resolution
+## Build The Identity Resolver
 
 Wrap your normal resolver with `provisioning.NewResolver`:
 
@@ -120,17 +124,14 @@ resolver, err := provisioning.NewResolver(provisioning.ResolverOptions{
 			return authkit.CreatePrincipalRequest{}, false, nil
 		}
 
-		email, ok := authkit.ClaimPath{"email"}.Lookup(identity.Claims)
-		if !ok {
-			return authkit.CreatePrincipalRequest{}, false, nil
+		name := identity.Subject
+		if value, ok := authkit.ClaimPath{"name"}.Lookup(identity.Claims); ok {
+			name = fmt.Sprint(value)
 		}
 
 		return authkit.CreatePrincipalRequest{
 			Kind:        authkit.PrincipalKindUser,
-			DisplayName: fmt.Sprint(email),
-			Attributes: map[string]any{
-				"email": email,
-			},
+			DisplayName: name,
 		}, true, nil
 	},
 })
@@ -142,40 +143,79 @@ if err != nil {
 The factory is the approval point. Return `false` when the identity should stay
 unresolved.
 
-## Build The Pipeline
+## Build The Identity Exchanger
 
-Use the provisioning resolver in the normal authkit pipeline:
+Create an access JWT issuer for your service, then wire the exchanger:
 
 ```go
-authorizer, err := roleauth.NewAuthorizer(store)
-if err != nil {
-	return err
-}
-
-pipeline, err := authkit.NewPipeline(authkit.PipelineOptions{
-	Authenticators: []authkit.Authenticator{oidcAuthenticator},
-	Resolver:       resolver,
-	Authorizer:     authorizer,
+identityExchanger, err := exchange.NewIdentityExchanger(exchange.IdentityOptions{
+	Resolver:     resolver,
+	AccessTokens: accessIssuer,
 })
 if err != nil {
 	return err
 }
 ```
 
+## Exchange A Token
+
+In your application-owned exchange route:
+
+```go
+identity, err := verifier.VerifyToken(req.Context(), rawOIDCToken)
+if err != nil {
+	return err
+}
+
+result, err := identityExchanger.Exchange(req.Context(), exchange.IdentityRequest{
+	Identity: identity,
+})
+if err != nil {
+	return err
+}
+
+accessToken := result.AccessToken.Plaintext
+```
+
+The route can return the access token in JSON, set an application cookie, or
+integrate with an application-owned session flow. authkit does not prescribe
+that transport.
+
+## Protect Resource Routes
+
+Protected routes should accept only authkit access JWTs:
+
+```go
+kit, err := compose.NewHTTP(compose.HTTPOptions{
+	PrincipalAuthenticators: []compose.PrincipalAuthenticatorSpec{
+		compose.AccessJWT(accessVerifier, store),
+	},
+	Authorizer: authorizer,
+})
+if err != nil {
+	return err
+}
+```
+
+Do not pass OIDC JWTs directly to resource routes. Verify and exchange them
+first.
+
 ## Verification
 
-Send a request with a JWT from the trusted issuer where:
+Send a token from the trusted issuer where:
 
-- `aud` contains `notes-api`
+- `aud` contains your configured audience
 - `sub` is a new external subject
-- `groups` contains `/engineering`
+- forwarded claims satisfy your provisioning rule
 
-The first request should create the principal, link `(issuer, sub)`, assign the
-`notes-reader` role, and allow `note:read`.
+The exchange should verify the token, create and link the principal if the
+factory approves it, assign matching initial roles, and issue an authkit access
+JWT. A later protected request should succeed only when it presents that authkit
+access JWT.
 
-Repeat the request with a token that omits `groups` or does not include
-`/engineering`. The principal may still be created when the factory approves it,
-but `note:read` should be denied unless another local role grant exists.
+Repeat the exchange with a token that omits required claims. The identity may
+still be provisioned when the factory approves it, but initial role assignment
+should not occur unless a provisioning rule matches.
 
 ## Troubleshooting
 
@@ -189,8 +229,14 @@ again before creating the rule.
 Provisioning rules assign roles only when a new principal is created. Assign
 roles explicitly for existing principals.
 
+### Direct OIDC Tokens Are Rejected On Resource Routes
+
+That is expected. OIDC tokens are accepted only by your exchange route. Resource
+routes authenticate authkit access JWTs.
+
 ## Related
 
+- [How to compose HTTP authentication](compose-http-auth.md)
 - [How to configure local roles](configure-local-roles.md)
 - [Security model](../explanations/security-model.md)
 - [Extension points reference](../reference/extension-points.md)

@@ -15,7 +15,6 @@ import (
 	"github.com/meigma/authkit/compose"
 	"github.com/meigma/authkit/httpauth"
 	"github.com/meigma/authkit/internal/authtest"
-	"github.com/meigma/authkit/oidc"
 	"github.com/meigma/authkit/store/memory"
 )
 
@@ -28,21 +27,11 @@ func TestNewHTTPValidatesInputs(t *testing.T) {
 		wantIs  error
 	}{
 		{
-			name: "requires at least one authenticator",
+			name: "requires at least one principal authenticator",
 			options: compose.HTTPOptions{
-				Resolver:   testResolver{},
 				Authorizer: testAuthorizer{},
 			},
-			want: "compose: at least one authenticator is required",
-		},
-		{
-			name: "rejects nil authenticator spec",
-			options: compose.HTTPOptions{
-				Authenticators: []compose.AuthenticatorSpec{nil},
-				Resolver:       testResolver{},
-				Authorizer:     testAuthorizer{},
-			},
-			want: "compose: authenticator spec 0 is required",
+			want: "compose: at least one principal authenticator is required",
 		},
 		{
 			name: "rejects nil principal authenticator spec",
@@ -51,20 +40,6 @@ func TestNewHTTPValidatesInputs(t *testing.T) {
 				Authorizer:              testAuthorizer{},
 			},
 			want: "compose: principal authenticator spec 0 is required",
-		},
-		{
-			name: "wraps authenticator build errors",
-			options: compose.HTTPOptions{
-				Authenticators: []compose.AuthenticatorSpec{
-					authenticatorSpecFunc(func() (authkit.Authenticator, error) {
-						return nil, boom
-					}),
-				},
-				Resolver:   testResolver{},
-				Authorizer: testAuthorizer{},
-			},
-			want:   "compose: build authenticator 0: boom",
-			wantIs: boom,
 		},
 		{
 			name: "wraps principal authenticator build errors",
@@ -78,21 +53,6 @@ func TestNewHTTPValidatesInputs(t *testing.T) {
 			},
 			want:   "compose: build principal authenticator 0: boom",
 			wantIs: boom,
-		},
-		{
-			name: "rejects nil built authenticator",
-			options: compose.HTTPOptions{
-				Authenticators: []compose.AuthenticatorSpec{
-					authenticatorSpecFunc(func() (authkit.Authenticator, error) {
-						var authenticator authkit.Authenticator
-
-						return authenticator, nil
-					}),
-				},
-				Resolver:   testResolver{},
-				Authorizer: testAuthorizer{},
-			},
-			want: "compose: authenticator 0 built nil authenticator",
 		},
 		{
 			name: "rejects nil built principal authenticator",
@@ -109,18 +69,13 @@ func TestNewHTTPValidatesInputs(t *testing.T) {
 			want: "compose: principal authenticator 0 built nil authenticator",
 		},
 		{
-			name: "wraps missing resolver error",
-			options: compose.HTTPOptions{
-				Authenticators: []compose.AuthenticatorSpec{compose.Existing(newTestAuthenticator("test"))},
-				Authorizer:     testAuthorizer{},
-			},
-			want: "compose: create pipeline: authkit: principal resolver is required",
-		},
-		{
 			name: "wraps missing authorizer error",
 			options: compose.HTTPOptions{
-				Authenticators: []compose.AuthenticatorSpec{compose.Existing(newTestAuthenticator("test"))},
-				Resolver:       testResolver{},
+				PrincipalAuthenticators: []compose.PrincipalAuthenticatorSpec{
+					principalAuthenticatorSpecFunc(func() (authkit.PrincipalAuthenticator, error) {
+						return newTestPrincipalAuthenticator("test", true), nil
+					}),
+				},
 			},
 			want: "compose: create pipeline: authkit: authorizer is required",
 		},
@@ -139,12 +94,12 @@ func TestNewHTTPValidatesInputs(t *testing.T) {
 	}
 }
 
-func TestNewHTTPWithAccessJWTDoesNotRequireResolver(t *testing.T) {
+func TestNewHTTPWithAccessJWTAuthenticatesPrincipals(t *testing.T) {
 	ctx := context.Background()
 	store := memory.NewStore()
 	principal, err := store.CreatePrincipal(ctx, authkit.CreatePrincipalRequest{
 		Kind:        authkit.PrincipalKindService,
-		DisplayName: "notes service",
+		DisplayName: "paste service",
 	})
 	require.NoError(t, err)
 	issuer, verifier := newAccessJWTIssuerAndVerifier(t)
@@ -163,38 +118,44 @@ func TestNewHTTPWithAccessJWTDoesNotRequireResolver(t *testing.T) {
 	authentication, err := kit.Pipeline.Authenticate(ctx, requestWithBearer(issued.Plaintext))
 
 	require.NoError(t, err)
-	assert.Empty(t, authentication.Identity)
 	assert.Equal(t, principal.ID, authentication.Principal.ID)
 }
 
-func TestNewHTTPPreservesAuthenticatorOrder(t *testing.T) {
-	first := newTestAuthenticator("first")
-	second := newTestAuthenticator("second")
+func TestNewHTTPPreservesPrincipalAuthenticatorOrder(t *testing.T) {
+	first := newTestPrincipalAuthenticator("first", false)
+	second := newTestPrincipalAuthenticator("second", true)
 	kit, err := compose.NewHTTP(compose.HTTPOptions{
-		Authenticators: []compose.AuthenticatorSpec{
-			compose.Existing(first),
-			compose.Existing(second),
+		PrincipalAuthenticators: []compose.PrincipalAuthenticatorSpec{
+			principalAuthenticatorSpecFunc(func() (authkit.PrincipalAuthenticator, error) {
+				return first, nil
+			}),
+			principalAuthenticatorSpecFunc(func() (authkit.PrincipalAuthenticator, error) {
+				return second, nil
+			}),
 		},
-		Resolver:   testResolver{},
 		Authorizer: testAuthorizer{},
 	})
 	require.NoError(t, err)
 
-	authentication, err := kit.Pipeline.Authenticate(context.Background(), requestWithBearer("token"))
+	authentication, err := kit.Pipeline.Authenticate(
+		context.Background(),
+		httptest.NewRequest(http.MethodGet, "/", nil),
+	)
 
 	require.NoError(t, err)
-	assert.Equal(t, "first", authentication.AuthenticatorName)
-	assert.Equal(t, "principal_first", authentication.Principal.ID)
+	assert.Equal(t, "second", authentication.AuthenticatorName)
+	assert.Equal(t, "principal_second", authentication.Principal.ID)
 	assert.Equal(t, 1, first.calls)
-	assert.Zero(t, second.calls)
+	assert.Equal(t, 1, second.calls)
 }
 
 func TestNewHTTPReturnsUsableMiddleware(t *testing.T) {
 	kit, err := compose.NewHTTP(compose.HTTPOptions{
-		Authenticators: []compose.AuthenticatorSpec{
-			compose.Existing(newTestAuthenticator("test")),
+		PrincipalAuthenticators: []compose.PrincipalAuthenticatorSpec{
+			principalAuthenticatorSpecFunc(func() (authkit.PrincipalAuthenticator, error) {
+				return newTestPrincipalAuthenticator("test", true), nil
+			}),
 		},
-		Resolver:   testResolver{},
 		Authorizer: testAuthorizer{},
 	})
 	require.NoError(t, err)
@@ -208,7 +169,7 @@ func TestNewHTTPReturnsUsableMiddleware(t *testing.T) {
 	}))
 	recorder := httptest.NewRecorder()
 
-	handler.ServeHTTP(recorder, requestWithBearer("token"))
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
 
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	require.True(t, ok)
@@ -217,10 +178,11 @@ func TestNewHTTPReturnsUsableMiddleware(t *testing.T) {
 
 func TestNewHTTPAppliesMiddlewareOptions(t *testing.T) {
 	kit, err := compose.NewHTTP(compose.HTTPOptions{
-		Authenticators: []compose.AuthenticatorSpec{
-			compose.Existing(newTestAuthenticator("test")),
+		PrincipalAuthenticators: []compose.PrincipalAuthenticatorSpec{
+			principalAuthenticatorSpecFunc(func() (authkit.PrincipalAuthenticator, error) {
+				return newTestPrincipalAuthenticator("test", false), nil
+			}),
 		},
-		Resolver:   testResolver{},
 		Authorizer: testAuthorizer{},
 		MiddlewareOptions: []httpauth.Option{
 			httpauth.WithErrorRenderer(func(w http.ResponseWriter, _ *http.Request, _ error) {
@@ -239,50 +201,6 @@ func TestNewHTTPAppliesMiddlewareOptions(t *testing.T) {
 
 	assert.Equal(t, http.StatusTeapot, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), "custom auth error")
-}
-
-func TestOIDCSpecBuildsAuthenticator(t *testing.T) {
-	source, err := oidc.NewStaticProviderSource()
-	require.NoError(t, err)
-	kit, err := compose.NewHTTP(compose.HTTPOptions{
-		Authenticators: []compose.AuthenticatorSpec{
-			compose.OIDC(source),
-		},
-		Resolver:   testResolver{},
-		Authorizer: testAuthorizer{},
-	})
-	require.NoError(t, err)
-
-	_, err = kit.Pipeline.Authenticate(context.Background(), httptest.NewRequest(http.MethodGet, "/", nil))
-
-	require.ErrorIs(t, err, authkit.ErrUnauthenticated)
-}
-
-func TestHelperSpecsWrapConstructorErrors(t *testing.T) {
-	tests := []struct {
-		name string
-		spec compose.AuthenticatorSpec
-		want string
-	}{
-		{
-			name: "OIDC provider source is required",
-			spec: compose.OIDC(nil),
-			want: "compose: build authenticator 0: oidc: provider source is required",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := compose.NewHTTP(compose.HTTPOptions{
-				Authenticators: []compose.AuthenticatorSpec{tt.spec},
-				Resolver:       testResolver{},
-				Authorizer:     testAuthorizer{},
-			})
-
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.want)
-		})
-	}
 }
 
 func TestAccessJWTSpecWrapsConstructorErrors(t *testing.T) {
@@ -319,58 +237,45 @@ func TestAccessJWTSpecWrapsConstructorErrors(t *testing.T) {
 	}
 }
 
-type authenticatorSpecFunc func() (authkit.Authenticator, error)
-
-func (f authenticatorSpecFunc) BuildAuthenticator() (authkit.Authenticator, error) {
-	return f()
-}
-
 type principalAuthenticatorSpecFunc func() (authkit.PrincipalAuthenticator, error)
 
 func (f principalAuthenticatorSpecFunc) BuildPrincipalAuthenticator() (authkit.PrincipalAuthenticator, error) {
 	return f()
 }
 
-type testAuthenticator struct {
-	name     string
-	identity authkit.Identity
-	calls    int
+type testPrincipalAuthenticator struct {
+	name        string
+	accepted    bool
+	calls       int
+	principalID string
 }
 
-func newTestAuthenticator(name string) *testAuthenticator {
-	return &testAuthenticator{
-		name: name,
-		identity: authkit.Identity{
-			Provider: name,
-			Subject:  "subject",
-		},
+func newTestPrincipalAuthenticator(name string, accepted bool) *testPrincipalAuthenticator {
+	return &testPrincipalAuthenticator{
+		name:        name,
+		accepted:    accepted,
+		principalID: "principal_" + name,
 	}
 }
 
-func (a *testAuthenticator) Name() string {
+func (a *testPrincipalAuthenticator) Name() string {
 	return a.name
 }
 
-func (a *testAuthenticator) Authenticate(_ context.Context, req *http.Request) (*authkit.Identity, error) {
+func (a *testPrincipalAuthenticator) AuthenticatePrincipal(
+	_ context.Context,
+	_ *http.Request,
+) (*authkit.PrincipalAuthentication, error) {
 	a.calls++
-	if req.Header.Get("Authorization") == "" {
+	if !a.accepted {
 		return nil, authkit.ErrUnauthenticated
 	}
 
-	identity := a.identity
-
-	return &identity, nil
-}
-
-type testResolver struct{}
-
-func (r testResolver) ResolveIdentity(
-	_ context.Context,
-	identity authkit.Identity,
-) (*authkit.Principal, error) {
-	return &authkit.Principal{
-		ID:   "principal_" + identity.Provider,
-		Kind: authkit.PrincipalKindService,
+	return &authkit.PrincipalAuthentication{
+		Principal: authkit.Principal{
+			ID:   a.principalID,
+			Kind: authkit.PrincipalKindService,
+		},
 	}, nil
 }
 

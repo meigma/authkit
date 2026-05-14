@@ -12,9 +12,6 @@ import (
 )
 
 const (
-	// Name identifies the OIDC JWT bearer authenticator.
-	Name = "oidc"
-
 	defaultSigningAlgorithm = "RS256"
 )
 

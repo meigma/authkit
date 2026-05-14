@@ -13,20 +13,12 @@ For root data types and request shapes, see
 
 ## Core Ports
 
-### `authkit.Authenticator`
-
-Verifies a request credential and returns an external identity. Implement this
-for an external credential source that has not yet moved behind an exchange
-flow.
-
-Provided adapters:
-
-- `oidc.NewAuthenticator`
-
 ### `authkit.PrincipalAuthenticator`
 
 Verifies a request credential and returns an internal principal. Use this for
-protected-resource routes that accept authkit-issued access JWTs.
+protected-resource routes that accept authkit-issued access JWTs. External
+credentials should be verified and exchanged before they reach protected
+resource middleware.
 
 Provided adapters:
 
@@ -34,8 +26,10 @@ Provided adapters:
 
 ### `authkit.PrincipalResolver`
 
-Maps an authenticated external identity to an internal principal. Implement this
-when principal links live outside the provided stores.
+Maps a verified external identity to an internal principal. Implement this when
+principal links live outside the provided stores. The request pipeline no longer
+uses this port directly; exchange and provisioning flows use it before issuing
+authkit access JWTs.
 
 Provided adapters:
 
@@ -126,6 +120,18 @@ enabled provisioning rules and passes matching local role IDs to
 For setup steps, see
 [How to auto-provision OIDC principals](../how-to/auto-provision-oidc-principals.md).
 
+## Exchange Services
+
+`exchange.APITokenExchanger` verifies an opaque API token, resolves its
+principal, and issues an authkit access JWT.
+
+`exchange.IdentityExchanger` accepts an already verified `authkit.Identity`,
+resolves or provisions the corresponding principal through an
+`authkit.PrincipalResolver`, and issues an authkit access JWT.
+
+Applications own the HTTP endpoint shape, CSRF protection, rate limiting,
+response body, and browser/session behavior around exchange routes.
+
 ## API Token Storage
 
 `apikey.TokenStore` stores token metadata and hashed secrets. Implement it when
@@ -142,9 +148,14 @@ Provided adapters:
 `oidc.ProviderTrustStore` adds mutation for setup flows.
 
 Trusted provider configuration can include forwarded claim paths. The OIDC
-authenticator copies only those verified claims, plus any static claims selected
-with `oidc.WithForwardedClaims` or `oidc.WithForwardedClaimPaths`, into
+verifier copies only those verified claims, plus any static claims selected with
+`oidc.WithForwardedClaims` or `oidc.WithForwardedClaimPaths`, into
 `authkit.Identity.Claims`.
+
+`oidc.NewVerifier` validates raw JWTs from trusted issuers and returns
+`authkit.Identity` values. Use those identities with
+`exchange.IdentityExchanger`; do not place OIDC JWTs directly on protected
+resource routes.
 
 Provided sources:
 
@@ -187,8 +198,8 @@ For setup steps, see [How to configure local roles](../how-to/configure-local-ro
 
 ## Composition Helper
 
-`compose.NewHTTP` wires common `net/http` setups. It builds authenticators in
-the order supplied, then constructs an `authkit.Pipeline` and
+`compose.NewHTTP` wires common `net/http` setups. It builds principal
+authenticators in the order supplied, then constructs an `authkit.Pipeline` and
 `httpauth.Middleware`.
 
 Use direct composition instead when you need complete control over

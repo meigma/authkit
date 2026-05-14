@@ -5,15 +5,6 @@ import (
 	"net/http"
 )
 
-// Authenticator verifies credentials from an HTTP request and returns an external identity.
-type Authenticator interface {
-	// Name returns a stable name for the authenticator.
-	Name() string
-
-	// Authenticate verifies the request credential and returns its external identity.
-	Authenticate(ctx context.Context, r *http.Request) (*Identity, error)
-}
-
 // PrincipalAuthentication describes a request credential that authenticated directly to a principal.
 type PrincipalAuthentication struct {
 	// Principal is the internal principal authenticated by the request credential.

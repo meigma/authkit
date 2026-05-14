@@ -1,14 +1,14 @@
 ---
 title: How To Use Explicit Composition
-description: Wire authenticators, the authkit pipeline, and HTTP middleware directly.
+description: Wire principal authenticators, the authkit pipeline, and HTTP middleware directly.
 ---
 
 # How To Use Explicit Composition
 
-Use explicit composition when you need full control over authenticator
+Use explicit composition when you need full control over principal authenticator
 construction, ordering, middleware options, or non-standard runtime wiring.
 
-## Build Authenticators
+## Build Principal Authenticators
 
 ```go
 accessAuthenticator, err := accessjwtauth.NewAuthenticator(accessVerifier, principalFinder)

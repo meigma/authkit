@@ -6,8 +6,9 @@ description: Understand authkit security invariants, guarantees, and non-goals.
 # Security Model
 
 authkit is a library for API services that already own their application domain,
-deployment model, and authorization policy. It verifies credentials, resolves
-principals, and delegates policy decisions to an authorizer.
+deployment model, and authorization policy. It verifies credentials, exchanges
+approved credentials for authkit access JWTs, resolves principals, and delegates
+policy decisions to an authorizer.
 
 ## API Tokens
 
@@ -24,13 +25,14 @@ an exchange service to issue a short-lived authkit access JWT.
 ## OIDC JWT Bearer Tokens
 
 OIDC support is for API resource servers validating externally issued JWT bearer
-tokens. It is not hosted browser login and it is not an OAuth authorization
-server.
+tokens as exchange proof. It is not hosted browser login and it is not an OAuth
+authorization server.
 
-The OIDC authenticator validates issuer, audience, signature, expiration, and
-standard time claims against trusted provider configuration. Provider trust is
-explicit and must come from static configuration, memory, Postgres, or an
-application-owned `oidc.ProviderSource`.
+The OIDC verifier validates issuer, audience, signature, expiration, and
+standard time claims against trusted provider configuration. Applications
+exchange verified OIDC identities for authkit access JWTs before protected
+resource routes. Provider trust is explicit and must come from static
+configuration, memory, Postgres, or an application-owned `oidc.ProviderSource`.
 
 OIDC identities use `(issuer, subject)` as the stable key. Email is not a stable
 identity key.
@@ -38,8 +40,8 @@ identity key.
 ## Auto-Provisioning
 
 Auto-provisioning is opt in. The provisioning resolver runs only after a
-credential has authenticated and normal identity resolution reports
-`authkit.ErrUnresolvedIdentity`.
+credential has been verified for exchange and normal identity resolution
+reports `authkit.ErrUnresolvedIdentity`.
 
 Provider trust does not imply provisioning approval. Applications provide the
 factory that decides which identities may create principals and how forwarded
@@ -53,7 +55,7 @@ against external identity metadata.
 
 ## Claim Forwarding
 
-OIDC claim forwarding is an explicit trust boundary. The authenticator verifies
+OIDC claim forwarding is an explicit trust boundary. The verifier checks
 the token first, then copies only configured claim paths into
 `authkit.Identity.Claims`.
 

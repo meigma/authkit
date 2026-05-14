@@ -22,11 +22,11 @@ credential and returns an internal `Principal`. An `Authorizer` decides whether
 an authorization check containing the principal, action, resource, and
 caller-supplied facts is allowed.
 
-The older identity path still exists for external credentials that have not yet
-been moved behind exchange flows:
+External credentials enter authkit through explicit exchange or onboarding
+flows before protected resource access:
 
 ```text
-Authenticator -> Identity -> PrincipalResolver -> Principal -> Authorizer
+external proof -> Identity -> resolve/provision Principal -> authkit access JWT
 ```
 
 The invariant is credential independence: permissions attach to the internal
@@ -105,16 +105,16 @@ and link external identities to principals through setup code, migrations, CLIs,
 or admin handlers they own.
 
 API tokens do not create identity links. They store `principal_id` directly and
-are exchanged for authkit access JWTs. OIDC still uses identity links until it
-is moved behind an exchange flow. For OIDC, the external identity is keyed as:
+are exchanged for authkit access JWTs. OIDC uses identity links during explicit
+exchange. For OIDC, the external identity is keyed as:
 
 ```text
 provider = issuer URL
 subject  = JWT sub
 ```
 
-A valid credential with no linked principal authenticates as a credential but
-does not become an application principal.
+A valid external credential with no linked principal remains unresolved unless
+an exchange or onboarding flow provisions it.
 
 ## Explicit Onboarding
 
@@ -123,18 +123,18 @@ credential method verifies auth material and returns an `authkit.Identity`,
 applications can use `onboarding.Service` to attach that identity to an existing
 principal or provision a new principal for it.
 
-Onboarding is an explicit application flow. Authenticators and the runtime
-pipeline do not create principals or attach identities while handling normal
-authenticated requests. This keeps browser login, admin enrollment, recovery,
-and trust checks in application-owned code while still reusing the same generic
-identity link and principal provisioning ports.
+Onboarding is an explicit application flow. The runtime pipeline does not
+create principals or attach identities while handling normal authenticated
+requests. This keeps browser login, admin enrollment, recovery, and trust checks
+in application-owned code while still reusing the same generic identity link and
+principal provisioning ports.
 
 ## Auto-Provisioning
 
-Auto-provisioning is an opt-in resolver behavior. A `provisioning.Resolver`
-first tries normal identity resolution. If the identity is unresolved, it calls
-application-owned policy code to decide whether that verified identity may
-create a principal.
+Auto-provisioning is an opt-in resolver behavior for exchange and onboarding
+flows. A `provisioning.Resolver` first tries normal identity resolution. If the
+identity is unresolved, it calls application-owned policy code to decide whether
+that verified identity may create a principal.
 
 Provisioning always starts with an application-owned approval point. When a
 rule source is configured, enabled provisioning rules may add initial local
@@ -143,11 +143,11 @@ CEL bool expressions over the verified identity and forwarded claims; missing
 claims and evaluation errors do not match rules, and existing principals are
 not re-synced.
 
-The OIDC authenticator and provisioning resolver have separate jobs. The
-authenticator verifies the token and forwards only configured claims. The
-resolver decides whether an unresolved verified identity may become a local
-principal. Provisioning rules only inspect claims that crossed the provider's
-forwarding boundary.
+The OIDC verifier and provisioning resolver have separate jobs. The verifier
+checks the token and forwards only configured claims. The resolver decides
+whether an unresolved verified identity may become a local principal.
+Provisioning rules only inspect claims that crossed the provider's forwarding
+boundary.
 
 ## HTTP Runtime
 
