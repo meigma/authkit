@@ -2,22 +2,28 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	casbinv3 "github.com/casbin/casbin/v3"
 	casbinmodel "github.com/casbin/casbin/v3/model"
+	"github.com/lestrrat-go/jwx/v3/jwa"
+	"github.com/lestrrat-go/jwx/v3/jwk"
 
 	"github.com/meigma/authkit"
+	"github.com/meigma/authkit/accessjwt"
 	"github.com/meigma/authkit/apikey"
 	authkitcasbin "github.com/meigma/authkit/casbin"
 	"github.com/meigma/authkit/compose"
 	"github.com/meigma/authkit/httpauth"
-	"github.com/meigma/authkit/oidc"
 	"github.com/meigma/authkit/store/memory"
 )
 
@@ -28,6 +34,11 @@ const (
 	noteIDPathValue         = "noteID"
 	allowedNoteID           = "allowed"
 	seedTokenTTL            = time.Hour
+	accessJWTTTL            = 15 * time.Minute
+	accessJWTIssuer         = "https://notes.example.local/authkit"
+	accessJWTAudience       = "notes-api"
+	accessJWTKeyID          = "notes-example-key"
+	rsaKeyBits              = 2048
 	serverReadHeaderTimeout = 5 * time.Second
 	serverReadTimeout       = 10 * time.Second
 	serverWriteTimeout      = 10 * time.Second
@@ -52,16 +63,15 @@ type notesApp struct {
 	handler        http.Handler
 	store          *memory.Store
 	tokenService   *apikey.Service
+	accessIssuer   *accessjwt.Issuer
 	principal      authkit.Principal
-	seedIdentity   authkit.ExternalIdentity
 	seedToken      string
 	tokenExpiresAt time.Time
 	notes          map[string]string
 }
 
 type notesAppOptions struct {
-	clock          func() time.Time
-	oidcHTTPClient *http.Client
+	clock func() time.Time
 }
 
 type notesAppOption func(*notesAppOptions)
@@ -69,12 +79,6 @@ type notesAppOption func(*notesAppOptions)
 func withClock(clock func() time.Time) notesAppOption {
 	return func(opts *notesAppOptions) {
 		opts.clock = clock
-	}
-}
-
-func withOIDCHTTPClient(client *http.Client) notesAppOption {
-	return func(opts *notesAppOptions) {
-		opts.oidcHTTPClient = client
 	}
 }
 
@@ -145,12 +149,12 @@ func newNotesApp(ctx context.Context, opts ...notesAppOption) (*notesApp, error)
 		return nil, err
 	}
 
-	seedIdentity, err := store.LinkIdentity(ctx, issued.IdentityLink)
+	accessIssuer, accessVerifier, err := newAccessJWTIssuerAndVerifier(cfg.clock)
 	if err != nil {
 		return nil, err
 	}
 
-	middleware, err := newNotesMiddleware(store, tokenService, cfg, principal.ID)
+	middleware, err := newNotesMiddleware(store, accessVerifier, principal.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -158,8 +162,8 @@ func newNotesApp(ctx context.Context, opts ...notesAppOption) (*notesApp, error)
 	app := &notesApp{
 		store:          store,
 		tokenService:   tokenService,
+		accessIssuer:   accessIssuer,
 		principal:      principal,
-		seedIdentity:   seedIdentity,
 		seedToken:      issued.Plaintext,
 		tokenExpiresAt: issued.ExpiresAt,
 		notes: map[string]string{
@@ -169,6 +173,7 @@ func newNotesApp(ctx context.Context, opts ...notesAppOption) (*notesApp, error)
 	}
 
 	mux := http.NewServeMux()
+	mux.Handle("POST /auth/token", http.HandlerFunc(app.exchangeAPIToken))
 	mux.Handle(
 		"GET /notes/{noteID}",
 		middleware.RequireFunc(readNoteAction, func(req *http.Request) (authkit.Resource, error) {
@@ -185,8 +190,7 @@ func newNotesApp(ctx context.Context, opts ...notesAppOption) (*notesApp, error)
 
 func newNotesMiddleware(
 	store *memory.Store,
-	tokenService *apikey.Service,
-	cfg notesAppOptions,
+	verifier *accessjwt.Verifier,
 	principalID string,
 ) (*httpauth.Middleware, error) {
 	enforcer, err := newCasbinEnforcer()
@@ -205,18 +209,10 @@ func newNotesMiddleware(
 	if err != nil {
 		return nil, err
 	}
-	oidcOptions := []oidc.Option{
-		oidc.WithClock(cfg.clock),
-	}
-	if cfg.oidcHTTPClient != nil {
-		oidcOptions = append(oidcOptions, oidc.WithHTTPClient(cfg.oidcHTTPClient))
-	}
 	auth, err := compose.NewHTTP(compose.HTTPOptions{
-		Authenticators: []compose.AuthenticatorSpec{
-			compose.APIToken(tokenService),
-			compose.OIDC(store, oidcOptions...),
+		PrincipalAuthenticators: []compose.PrincipalAuthenticatorSpec{
+			compose.AccessJWT(verifier, store),
 		},
-		Resolver:   store,
 		Authorizer: authorizer,
 	})
 	if err != nil {
@@ -228,6 +224,65 @@ func newNotesMiddleware(
 
 func (a *notesApp) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	a.handler.ServeHTTP(w, req)
+}
+
+func (a *notesApp) exchangeAPIToken(w http.ResponseWriter, req *http.Request) {
+	rawToken, err := bearerToken(req)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+
+		return
+	}
+
+	identity, err := a.tokenService.VerifyToken(req.Context(), rawToken)
+	if err != nil {
+		writeAuthExchangeError(w, err)
+
+		return
+	}
+
+	stored, err := a.store.FindToken(req.Context(), identity.CredentialID)
+	if errors.Is(err, apikey.ErrTokenNotFound) {
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+
+		return
+	}
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+
+		return
+	}
+
+	principal, err := a.store.FindPrincipal(req.Context(), stored.PrincipalID)
+	if errors.Is(err, authkit.ErrPrincipalNotFound) {
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+
+		return
+	}
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+
+		return
+	}
+
+	issued, err := a.accessIssuer.IssueToken(req.Context(), accessjwt.IssueRequest{
+		PrincipalID: principal.ID,
+	})
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	//nolint:gosec // The exchange endpoint intentionally returns the newly issued access JWT once.
+	if err := json.NewEncoder(w).Encode(exchangeResponse{
+		Value:     issued.Plaintext,
+		TokenType: "Bearer",
+		ExpiresAt: issued.ExpiresAt,
+	}); err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+	}
 }
 
 func (a *notesApp) serveNote(w http.ResponseWriter, req *http.Request) {
@@ -249,6 +304,31 @@ func (a *notesApp) serveNote(w http.ResponseWriter, req *http.Request) {
 	_, _ = fmt.Fprintln(w, body)
 }
 
+type exchangeResponse struct {
+	Value     string    `json:"access_token"`
+	TokenType string    `json:"token_type"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+func bearerToken(req *http.Request) (string, error) {
+	header := req.Header.Get("Authorization")
+	parts := strings.Fields(header)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return "", fmt.Errorf("%w: bearer token is required", authkit.ErrUnauthenticated)
+	}
+
+	return parts[1], nil
+}
+
+func writeAuthExchangeError(w http.ResponseWriter, err error) {
+	status := http.StatusInternalServerError
+	if errors.Is(err, authkit.ErrUnauthenticated) {
+		status = http.StatusUnauthorized
+	}
+
+	http.Error(w, http.StatusText(status), status)
+}
+
 func newCasbinEnforcer() (*casbinv3.Enforcer, error) {
 	model, err := casbinmodel.NewModelFromString(casbinModel)
 	if err != nil {
@@ -261,6 +341,55 @@ func newCasbinEnforcer() (*casbinv3.Enforcer, error) {
 	}
 
 	return enforcer, nil
+}
+
+func newAccessJWTIssuerAndVerifier(
+	clock func() time.Time,
+) (*accessjwt.Issuer, *accessjwt.Verifier, error) {
+	rawKey, err := rsa.GenerateKey(rand.Reader, rsaKeyBits)
+	if err != nil {
+		return nil, nil, fmt.Errorf("notes: generate access JWT key: %w", err)
+	}
+	signingKey, err := jwk.Import(rawKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("notes: import access JWT key: %w", err)
+	}
+	if setErr := signingKey.Set(jwk.KeyIDKey, accessJWTKeyID); setErr != nil {
+		return nil, nil, fmt.Errorf("notes: set access JWT key ID: %w", setErr)
+	}
+	if setErr := signingKey.Set(jwk.AlgorithmKey, jwa.RS256()); setErr != nil {
+		return nil, nil, fmt.Errorf("notes: set access JWT key algorithm: %w", setErr)
+	}
+	publicKey, err := jwk.PublicKeyOf(signingKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("notes: derive access JWT public key: %w", err)
+	}
+	keySet := jwk.NewSet()
+	if addErr := keySet.AddKey(publicKey); addErr != nil {
+		return nil, nil, fmt.Errorf("notes: build access JWT key set: %w", addErr)
+	}
+
+	issuer, err := accessjwt.NewIssuer(accessjwt.IssuerOptions{
+		Issuer:     accessJWTIssuer,
+		Audience:   accessJWTAudience,
+		TTL:        accessJWTTTL,
+		SigningKey: signingKey,
+		Clock:      clock,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("notes: create access JWT issuer: %w", err)
+	}
+	verifier, err := accessjwt.NewVerifier(accessjwt.VerifierOptions{
+		Issuer:   accessJWTIssuer,
+		Audience: accessJWTAudience,
+		KeySet:   keySet,
+		Clock:    clock,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("notes: create access JWT verifier: %w", err)
+	}
+
+	return issuer, verifier, nil
 }
 
 func noteObject(noteID string) string {

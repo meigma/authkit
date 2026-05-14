@@ -16,19 +16,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/meigma/authkit"
 	"github.com/meigma/authkit/apikey"
-	"github.com/meigma/authkit/oidc"
 )
 
 const (
-	linkedOIDCSubject   = "oidc-user-123"
-	unlinkedOIDCSubject = "oidc-user-456"
-	testAudience        = "notes-api"
+	linkedOIDCSubject = "oidc-user-123"
+	testAudience      = "notes-api"
 )
 
 func TestNotesAppAuthorizesRequests(t *testing.T) {
 	tc := newMixedTestContext(t)
+	accessToken := exchangeAccessToken(t, tc.app, tc.app.seedToken)
 
 	tests := []struct {
 		name          string
@@ -38,30 +36,16 @@ func TestNotesAppAuthorizesRequests(t *testing.T) {
 		wantBody      string
 	}{
 		{
-			name:          "allows seeded API token to read allowed note",
+			name:          "allows access JWT to read allowed note",
 			path:          "/notes/allowed",
-			authorization: bearer(tc.app.seedToken),
+			authorization: bearer(accessToken),
 			wantStatus:    http.StatusOK,
 			wantBody:      "This note is readable by the seeded service principal.\n",
 		},
 		{
-			name:          "allows linked OIDC token to read allowed note",
-			path:          "/notes/allowed",
-			authorization: bearer(tc.linkedOIDCToken),
-			wantStatus:    http.StatusOK,
-			wantBody:      "This note is readable by the seeded service principal.\n",
-		},
-		{
-			name:          "denies seeded API token for note outside policy",
+			name:          "denies access JWT for note outside policy",
 			path:          "/notes/denied",
-			authorization: bearer(tc.app.seedToken),
-			wantStatus:    http.StatusForbidden,
-			wantBody:      "Forbidden\n",
-		},
-		{
-			name:          "denies linked OIDC token for note outside policy",
-			path:          "/notes/denied",
-			authorization: bearer(tc.linkedOIDCToken),
+			authorization: bearer(accessToken),
 			wantStatus:    http.StatusForbidden,
 			wantBody:      "Forbidden\n",
 		},
@@ -79,30 +63,23 @@ func TestNotesAppAuthorizesRequests(t *testing.T) {
 			wantBody:      "Unauthorized\n",
 		},
 		{
-			name:          "rejects valid API token without identity link",
+			name:          "rejects direct seed API token",
+			path:          "/notes/allowed",
+			authorization: bearer(tc.app.seedToken),
+			wantStatus:    http.StatusUnauthorized,
+			wantBody:      "Unauthorized\n",
+		},
+		{
+			name:          "rejects direct unlinked API token",
 			path:          "/notes/allowed",
 			authorization: bearer(tc.unlinkedAPIToken),
 			wantStatus:    http.StatusUnauthorized,
 			wantBody:      "Unauthorized\n",
 		},
 		{
-			name:          "rejects OIDC token with wrong audience",
+			name:          "rejects direct OIDC bearer token",
 			path:          "/notes/allowed",
-			authorization: bearer(tc.wrongAudienceOIDCToken),
-			wantStatus:    http.StatusUnauthorized,
-			wantBody:      "Unauthorized\n",
-		},
-		{
-			name:          "rejects OIDC token from untrusted issuer",
-			path:          "/notes/allowed",
-			authorization: bearer(tc.untrustedIssuerOIDCToken),
-			wantStatus:    http.StatusUnauthorized,
-			wantBody:      "Unauthorized\n",
-		},
-		{
-			name:          "rejects valid OIDC token without identity link",
-			path:          "/notes/allowed",
-			authorization: bearer(tc.unlinkedOIDCToken),
+			authorization: bearer(tc.linkedOIDCToken),
 			wantStatus:    http.StatusUnauthorized,
 			wantBody:      "Unauthorized\n",
 		},
@@ -124,30 +101,35 @@ func TestNotesAppAuthorizesRequests(t *testing.T) {
 	}
 }
 
-func TestNotesAppLinksAPIAndOIDCIdentitiesToSamePrincipal(t *testing.T) {
+func TestNotesAppExchangesAPITokenForAccessJWT(t *testing.T) {
 	tc := newMixedTestContext(t)
-	apiPrincipal := resolveIdentity(t, tc.app, authkit.Identity{
-		Provider: tc.app.seedIdentity.Provider,
-		Subject:  tc.app.seedIdentity.Subject,
-	})
-	oidcPrincipal := resolveIdentity(t, tc.app, authkit.Identity{
-		Provider: tc.issuer.issuer,
-		Subject:  linkedOIDCSubject,
-	})
+	accessToken := exchangeAccessToken(t, tc.app, tc.app.seedToken)
+	req := httptest.NewRequest(http.MethodGet, "/notes/allowed", nil)
+	req.Header.Set("Authorization", bearer(accessToken))
 
-	assert.Equal(t, tc.app.principal.ID, apiPrincipal.ID)
-	assert.Equal(t, tc.app.principal.ID, oidcPrincipal.ID)
-	assert.Equal(t, apiPrincipal, oidcPrincipal)
+	recorder := httptest.NewRecorder()
+	tc.app.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "This note is readable by the seeded service principal.\n", recorder.Body.String())
+}
+
+func TestNotesAppRejectsInvalidExchangeCredential(t *testing.T) {
+	tc := newMixedTestContext(t)
+	req := httptest.NewRequest(http.MethodPost, "/auth/token", nil)
+	req.Header.Set("Authorization", bearer("invalid"))
+
+	recorder := httptest.NewRecorder()
+	tc.app.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+	assert.Equal(t, "Unauthorized\n", recorder.Body.String())
 }
 
 type mixedTestContext struct {
-	app                      *notesApp
-	issuer                   *testIssuer
-	linkedOIDCToken          string
-	wrongAudienceOIDCToken   string
-	untrustedIssuerOIDCToken string
-	unlinkedOIDCToken        string
-	unlinkedAPIToken         string
+	app              *notesApp
+	linkedOIDCToken  string
+	unlinkedAPIToken string
 }
 
 func newMixedTestContext(t *testing.T) mixedTestContext {
@@ -156,43 +138,19 @@ func newMixedTestContext(t *testing.T) mixedTestContext {
 	ctx := context.Background()
 	now := fixedTestTime()
 	issuer := newTestIssuer(t)
-	untrustedIssuer := newTestIssuer(t)
 	app, err := newNotesApp(
 		ctx,
 		withClock(func() time.Time {
 			return now
 		}),
-		withOIDCHTTPClient(issuer.server.Client()),
 	)
 	require.NoError(t, err)
 
-	_, err = app.store.TrustProvider(ctx, issuer.provider(testAudience))
-	require.NoError(t, err)
-	_, err = app.store.LinkIdentity(ctx, authkit.LinkIdentityRequest{
-		Provider:    issuer.issuer,
-		Subject:     linkedOIDCSubject,
-		PrincipalID: app.principal.ID,
-	})
-	require.NoError(t, err)
-
 	return mixedTestContext{
-		app:    app,
-		issuer: issuer,
+		app: app,
 		linkedOIDCToken: issuer.sign(
 			t,
 			tokenRequest{subject: linkedOIDCSubject, audiences: []string{testAudience}},
-		),
-		wrongAudienceOIDCToken: issuer.sign(
-			t,
-			tokenRequest{subject: linkedOIDCSubject, audiences: []string{"other-api"}},
-		),
-		untrustedIssuerOIDCToken: untrustedIssuer.sign(
-			t,
-			tokenRequest{subject: linkedOIDCSubject, audiences: []string{testAudience}},
-		),
-		unlinkedOIDCToken: issuer.sign(
-			t,
-			tokenRequest{subject: unlinkedOIDCSubject, audiences: []string{testAudience}},
 		),
 		unlinkedAPIToken: issueUnlinkedToken(t, app),
 	}
@@ -211,14 +169,23 @@ func issueUnlinkedToken(t *testing.T, app *notesApp) string {
 	return issued.Plaintext
 }
 
-func resolveIdentity(t *testing.T, app *notesApp, identity authkit.Identity) authkit.Principal {
+func exchangeAccessToken(t *testing.T, app *notesApp, apiToken string) string {
 	t.Helper()
 
-	principal, err := app.store.ResolveIdentity(context.Background(), identity)
-	require.NoError(t, err)
-	require.NotNil(t, principal)
+	req := httptest.NewRequest(http.MethodPost, "/auth/token", nil)
+	req.Header.Set("Authorization", bearer(apiToken))
 
-	return *principal
+	recorder := httptest.NewRecorder()
+	app.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response exchangeResponse
+	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&response))
+	require.NotEmpty(t, response.Value)
+	assert.Equal(t, "Bearer", response.TokenType)
+	assert.Equal(t, fixedTestTime().Add(accessJWTTTL), response.ExpiresAt)
+
+	return response.Value
 }
 
 type testIssuer struct {
@@ -266,14 +233,6 @@ func newTestIssuer(t *testing.T) *testIssuer {
 	issuer.jwksURL = issuer.server.URL + "/jwks"
 
 	return issuer
-}
-
-func (i *testIssuer) provider(audience string) oidc.Provider {
-	return oidc.Provider{
-		Issuer:    i.issuer,
-		Audiences: []string{audience},
-		JWKSURL:   i.jwksURL,
-	}
 }
 
 func (i *testIssuer) sign(t *testing.T, req tokenRequest) string {

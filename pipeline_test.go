@@ -62,6 +62,13 @@ func TestNewPipelineValidatesRequiredDependencies(t *testing.T) {
 			},
 		},
 		{
+			name: "nil principal authenticator",
+			opts: authkit.PipelineOptions{
+				PrincipalAuthenticators: []authkit.PrincipalAuthenticator{nil},
+				Authorizer:              allowAuthorizer(),
+			},
+		},
+		{
 			name: "missing resolver",
 			opts: authkit.PipelineOptions{
 				Authenticators: []authkit.Authenticator{allowAuthenticator()},
@@ -85,6 +92,54 @@ func TestNewPipelineValidatesRequiredDependencies(t *testing.T) {
 			assert.Nil(t, pipeline)
 		})
 	}
+}
+
+func TestNewPipelineAllowsPrincipalAuthenticatorWithoutResolver(t *testing.T) {
+	pipeline, err := authkit.NewPipeline(authkit.PipelineOptions{
+		PrincipalAuthenticators: []authkit.PrincipalAuthenticator{allowPrincipalAuthenticator()},
+		Authorizer:              allowAuthorizer(),
+	})
+
+	require.NoError(t, err)
+	assert.NotNil(t, pipeline)
+}
+
+func TestPipelineAuthenticateUsesFirstSuccessfulPrincipalAuthenticator(t *testing.T) {
+	firstCalls := 0
+	secondCalls := 0
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	pipeline := newTestPipeline(t, authkit.PipelineOptions{
+		PrincipalAuthenticators: []authkit.PrincipalAuthenticator{
+			testPrincipalAuthenticator{
+				name: "first",
+				authenticate: func(context.Context, *http.Request) (*authkit.PrincipalAuthentication, error) {
+					firstCalls++
+
+					return nil, fmtUnauthenticated("missing first credential")
+				},
+			},
+			testPrincipalAuthenticator{
+				name: "second",
+				authenticate: func(context.Context, *http.Request) (*authkit.PrincipalAuthentication, error) {
+					secondCalls++
+
+					return &authkit.PrincipalAuthentication{
+						Principal: testPrincipal(),
+					}, nil
+				},
+			},
+		},
+		Authorizer: allowAuthorizer(),
+	})
+
+	authentication, err := pipeline.Authenticate(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, "second", authentication.AuthenticatorName)
+	assert.Empty(t, authentication.Identity)
+	assert.Equal(t, testPrincipal(), authentication.Principal)
+	assert.Equal(t, 1, firstCalls)
+	assert.Equal(t, 1, secondCalls)
 }
 
 func TestPipelineAuthenticateUsesFirstSuccessfulAuthenticator(t *testing.T) {
@@ -140,6 +195,9 @@ func TestPipelineAuthenticateUsesFirstSuccessfulAuthenticator(t *testing.T) {
 func TestPipelineAuthenticateReturnsUnauthenticatedWhenAllAuthenticatorsReject(t *testing.T) {
 	resolverCalls := 0
 	pipeline := newTestPipeline(t, authkit.PipelineOptions{
+		PrincipalAuthenticators: []authkit.PrincipalAuthenticator{
+			denyPrincipalAuthenticator("principal"),
+		},
 		Authenticators: []authkit.Authenticator{
 			denyAuthenticator("first"),
 			denyAuthenticator("second"),
@@ -161,6 +219,27 @@ func TestPipelineAuthenticateReturnsUnauthenticatedWhenAllAuthenticatorsReject(t
 	require.ErrorIs(t, err, authkit.ErrUnauthenticated)
 	assert.Empty(t, authentication)
 	assert.Equal(t, 0, resolverCalls)
+}
+
+func TestPipelineAuthenticateWrapsUnexpectedPrincipalAuthenticatorErrors(t *testing.T) {
+	authenticatorErr := errors.New("provider failed")
+	pipeline := newTestPipeline(t, authkit.PipelineOptions{
+		PrincipalAuthenticators: []authkit.PrincipalAuthenticator{
+			testPrincipalAuthenticator{
+				name: "provider",
+				authenticate: func(context.Context, *http.Request) (*authkit.PrincipalAuthentication, error) {
+					return nil, authenticatorErr
+				},
+			},
+		},
+		Authorizer: allowAuthorizer(),
+	})
+
+	authentication, err := pipeline.Authenticate(context.Background(), httptest.NewRequest(http.MethodGet, "/", nil))
+
+	require.ErrorIs(t, err, authkit.ErrInternal)
+	require.ErrorIs(t, err, authenticatorErr)
+	assert.Empty(t, authentication)
 }
 
 func TestPipelineAuthenticatePreservesUnresolvedIdentity(t *testing.T) {
@@ -253,6 +332,35 @@ func TestPipelineAuthenticateWrapsBadCollaboratorContracts(t *testing.T) {
 					resolve: func(context.Context, authkit.Identity) (*authkit.Principal, error) {
 						//nolint:nilnil // Intentionally exercises bad collaborator contract handling.
 						return nil, nil
+					},
+				},
+				Authorizer: allowAuthorizer(),
+			},
+		},
+		{
+			name: "principal authenticator returns nil authentication without error",
+			opts: authkit.PipelineOptions{
+				PrincipalAuthenticators: []authkit.PrincipalAuthenticator{
+					testPrincipalAuthenticator{
+						name: "bad",
+						authenticate: func(context.Context, *http.Request) (*authkit.PrincipalAuthentication, error) {
+							//nolint:nilnil // Intentionally exercises bad collaborator contract handling.
+							return nil, nil
+						},
+					},
+				},
+				Authorizer: allowAuthorizer(),
+			},
+		},
+		{
+			name: "principal authenticator returns principal without ID",
+			opts: authkit.PipelineOptions{
+				PrincipalAuthenticators: []authkit.PrincipalAuthenticator{
+					testPrincipalAuthenticator{
+						name: "bad",
+						authenticate: func(context.Context, *http.Request) (*authkit.PrincipalAuthentication, error) {
+							return &authkit.PrincipalAuthentication{}, nil
+						},
 					},
 				},
 				Authorizer: allowAuthorizer(),
@@ -553,6 +661,22 @@ func (a testAuthenticator) Authenticate(ctx context.Context, req *http.Request) 
 	return a.authenticate(ctx, req)
 }
 
+type testPrincipalAuthenticator struct {
+	name         string
+	authenticate func(context.Context, *http.Request) (*authkit.PrincipalAuthentication, error)
+}
+
+func (a testPrincipalAuthenticator) Name() string {
+	return a.name
+}
+
+func (a testPrincipalAuthenticator) AuthenticatePrincipal(
+	ctx context.Context,
+	req *http.Request,
+) (*authkit.PrincipalAuthentication, error) {
+	return a.authenticate(ctx, req)
+}
+
 type testResolver struct {
 	resolve func(context.Context, authkit.Identity) (*authkit.Principal, error)
 }
@@ -580,10 +704,30 @@ func allowAuthenticator() testAuthenticator {
 	}
 }
 
+func allowPrincipalAuthenticator() testPrincipalAuthenticator {
+	return testPrincipalAuthenticator{
+		name: "test",
+		authenticate: func(context.Context, *http.Request) (*authkit.PrincipalAuthentication, error) {
+			return &authkit.PrincipalAuthentication{
+				Principal: testPrincipal(),
+			}, nil
+		},
+	}
+}
+
 func denyAuthenticator(name string) testAuthenticator {
 	return testAuthenticator{
 		name: name,
 		authenticate: func(context.Context, *http.Request) (*authkit.Identity, error) {
+			return nil, fmtUnauthenticated("not found")
+		},
+	}
+}
+
+func denyPrincipalAuthenticator(name string) testPrincipalAuthenticator {
+	return testPrincipalAuthenticator{
+		name: name,
+		authenticate: func(context.Context, *http.Request) (*authkit.PrincipalAuthentication, error) {
 			return nil, fmtUnauthenticated("not found")
 		},
 	}

@@ -3,7 +3,7 @@
 authkit is a Go library for authentication and authorization in Web API services.
 It provides reusable request authentication, principal resolution, and authorization plumbing without becoming an identity provider, hosted login system, or policy framework.
 
-The shared auth path works end to end: an API token or OIDC-issued JWT bearer token authenticates to an external identity, the identity resolves to an internal principal, and an authorizer checks that principal against an action, application resource, and optional caller-supplied facts.
+The shared auth path works end to end: a short-lived authkit access JWT authenticates to an internal principal, and an authorizer checks that principal against an action, application resource, and optional caller-supplied facts.
 
 ## Installation
 
@@ -21,16 +21,24 @@ go run ./examples/notes
 
 The example prints a seed API token and starts `http://localhost:8080`.
 
-Use the printed token to call the allowed route:
+Exchange the seed API token for an authkit access JWT:
 
 ```sh
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/notes/allowed
+ACCESS_TOKEN=$(curl -s -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/auth/token | jq -r .access_token)
 ```
 
-The same token is authenticated but denied by policy for another note:
+Use the access JWT to call the allowed route:
 
 ```sh
-curl -i -H "Authorization: Bearer $TOKEN" http://localhost:8080/notes/denied
+curl -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/notes/allowed
+```
+
+The same access JWT is authenticated but denied by policy for another note:
+
+```sh
+curl -i -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/notes/denied
 ```
 
 The example is also covered by tests:

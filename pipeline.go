@@ -9,6 +9,9 @@ import (
 
 // PipelineOptions configures a Pipeline.
 type PipelineOptions struct {
+	// PrincipalAuthenticators verify request credentials that authenticate directly to principals.
+	PrincipalAuthenticators []PrincipalAuthenticator
+
 	// Authenticators verify request credentials in order.
 	Authenticators []Authenticator
 
@@ -21,9 +24,10 @@ type PipelineOptions struct {
 
 // Pipeline composes authentication, principal resolution, and authorization.
 type Pipeline struct {
-	authenticators []Authenticator
-	resolver       PrincipalResolver
-	authorizer     Authorizer
+	principalAuthenticators []PrincipalAuthenticator
+	authenticators          []Authenticator
+	resolver                PrincipalResolver
+	authorizer              Authorizer
 }
 
 // Authentication describes a successfully authenticated and resolved request.
@@ -52,33 +56,50 @@ type Authorization struct {
 
 // NewPipeline constructs a request auth pipeline from opts.
 func NewPipeline(opts PipelineOptions) (*Pipeline, error) {
-	if len(opts.Authenticators) == 0 {
+	if len(opts.PrincipalAuthenticators) == 0 && len(opts.Authenticators) == 0 {
 		return nil, errors.New("authkit: at least one authenticator is required")
+	}
+	for i, authenticator := range opts.PrincipalAuthenticators {
+		if authenticator == nil {
+			return nil, fmt.Errorf("authkit: principal authenticator %d is required", i)
+		}
 	}
 	for i, authenticator := range opts.Authenticators {
 		if authenticator == nil {
 			return nil, fmt.Errorf("authkit: authenticator %d is required", i)
 		}
 	}
-	if opts.Resolver == nil {
+	if len(opts.Authenticators) > 0 && opts.Resolver == nil {
 		return nil, errors.New("authkit: principal resolver is required")
 	}
 	if opts.Authorizer == nil {
 		return nil, errors.New("authkit: authorizer is required")
 	}
 
+	principalAuthenticators := make([]PrincipalAuthenticator, len(opts.PrincipalAuthenticators))
+	copy(principalAuthenticators, opts.PrincipalAuthenticators)
 	authenticators := make([]Authenticator, len(opts.Authenticators))
 	copy(authenticators, opts.Authenticators)
 
 	return &Pipeline{
-		authenticators: authenticators,
-		resolver:       opts.Resolver,
-		authorizer:     opts.Authorizer,
+		principalAuthenticators: principalAuthenticators,
+		authenticators:          authenticators,
+		resolver:                opts.Resolver,
+		authorizer:              opts.Authorizer,
 	}, nil
 }
 
-// Authenticate authenticates req and resolves the resulting identity to a principal.
+// Authenticate authenticates req and returns the resulting principal.
 func (p *Pipeline) Authenticate(ctx context.Context, req *http.Request) (Authentication, error) {
+	for _, authenticator := range p.principalAuthenticators {
+		authentication, authenticated, err := p.authenticatePrincipalWith(ctx, req, authenticator)
+		if err != nil {
+			return authentication, err
+		}
+		if authenticated {
+			return authentication, nil
+		}
+	}
 	for _, authenticator := range p.authenticators {
 		authentication, authenticated, err := p.authenticateWith(ctx, req, authenticator)
 		if err != nil {
@@ -90,6 +111,48 @@ func (p *Pipeline) Authenticate(ctx context.Context, req *http.Request) (Authent
 	}
 
 	return Authentication{}, fmt.Errorf("%w: no authenticator accepted request", ErrUnauthenticated)
+}
+
+func (p *Pipeline) authenticatePrincipalWith(
+	ctx context.Context,
+	req *http.Request,
+	authenticator PrincipalAuthenticator,
+) (Authentication, bool, error) {
+	principalAuthentication, err := authenticator.AuthenticatePrincipal(ctx, req)
+	if err != nil {
+		if isContextError(err) {
+			return Authentication{}, false, err
+		}
+		if errors.Is(err, ErrUnauthenticated) {
+			return Authentication{}, false, nil
+		}
+
+		return Authentication{}, false, fmt.Errorf(
+			"%w: principal authenticator %q failed: %w",
+			ErrInternal,
+			authenticator.Name(),
+			err,
+		)
+	}
+	if principalAuthentication == nil {
+		return Authentication{}, false, fmt.Errorf(
+			"%w: principal authenticator %q returned nil authentication",
+			ErrInternal,
+			authenticator.Name(),
+		)
+	}
+	if principalAuthentication.Principal.ID == "" {
+		return Authentication{}, false, fmt.Errorf(
+			"%w: principal authenticator %q returned principal without ID",
+			ErrInternal,
+			authenticator.Name(),
+		)
+	}
+
+	return Authentication{
+		AuthenticatorName: authenticator.Name(),
+		Principal:         principalAuthentication.Principal,
+	}, true, nil
 }
 
 func (p *Pipeline) authenticateWith(
