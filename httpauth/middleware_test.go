@@ -7,15 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/meigma/authkit"
-	"github.com/meigma/authkit/apikey"
 	"github.com/meigma/authkit/httpauth"
-	"github.com/meigma/authkit/store/memory"
 )
 
 func TestNewMiddlewareValidatesPipeline(t *testing.T) {
@@ -330,54 +327,6 @@ func TestMiddlewareUsesCustomRenderer(t *testing.T) {
 	require.ErrorIs(t, renderedErr, authkit.ErrUnauthenticated)
 	assert.Equal(t, http.StatusTeapot, recorder.Code)
 	assert.Equal(t, "custom\n", recorder.Body.String())
-}
-
-func TestMiddlewareAuthenticatesAPITokenThroughHTTPPath(t *testing.T) {
-	now := time.Date(2026, time.May, 7, 19, 45, 0, 0, time.UTC)
-	store := memory.NewStore()
-	tokenService, err := apikey.NewService(store, apikey.WithClock(func() time.Time {
-		return now
-	}))
-	require.NoError(t, err)
-	tokenAuthenticator, err := apikey.NewAuthenticator(tokenService)
-	require.NoError(t, err)
-	principal, err := store.CreatePrincipal(context.Background(), authkit.CreatePrincipalRequest{
-		Kind:        authkit.PrincipalKindService,
-		DisplayName: "deploy service",
-	})
-	require.NoError(t, err)
-	issued, err := tokenService.IssueToken(context.Background(), apikey.IssueRequest{
-		PrincipalID: principal.ID,
-		Name:        "deploy token",
-		ExpiresAt:   now.Add(time.Hour),
-	})
-	require.NoError(t, err)
-	_, err = store.LinkIdentity(context.Background(), issued.IdentityLink)
-	require.NoError(t, err)
-	pipeline, err := authkit.NewPipeline(authkit.PipelineOptions{
-		Authenticators: []authkit.Authenticator{tokenAuthenticator},
-		Resolver:       store,
-		Authorizer:     allowAuthorizer(),
-	})
-	require.NoError(t, err)
-	middleware := newMiddleware(t, pipeline)
-	handler := middleware.Require("deploy", authkit.Resource{Type: "service", ID: "deploy"})(
-		http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			got, ok := httpauth.PrincipalFromContext(req.Context())
-			if assert.True(t, ok) {
-				assert.Equal(t, principal, got)
-			}
-
-			w.WriteHeader(http.StatusNoContent)
-		}),
-	)
-	req := httptest.NewRequest(http.MethodPost, "/deploy", nil)
-	req.Header.Set("Authorization", "Bearer "+issued.Plaintext)
-
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, req)
-
-	assert.Equal(t, http.StatusNoContent, recorder.Code)
 }
 
 func newMiddleware(t *testing.T, pipeline *authkit.Pipeline) *httpauth.Middleware {

@@ -8,13 +8,13 @@ description: Learn the authkit request path by running the notes example.
 In this tutorial, we will run the notes example and make authenticated requests
 through the same path a real API service uses.
 
-The example creates a service principal, issues an opaque API token, links the
-token identity to the principal, installs a Casbin policy, and protects a
-`GET /notes/{noteID}` route.
+The example creates a service principal, issues an opaque API token for that
+principal, installs a Casbin policy, exposes an exchange route, and protects a
+`GET /notes/{noteID}` route with authkit access JWTs.
 
-This tutorial follows the minimal API-token and Casbin path. Local roles, OIDC
-auto-provisioning, and authorization facts are covered in task guides after the
-tutorial.
+This tutorial follows the minimal API-token exchange and Casbin path. Local
+roles, OIDC auto-provisioning, and authorization facts are covered in task
+guides after the tutorial.
 
 ## Run The Example
 
@@ -40,12 +40,23 @@ In another terminal, put the printed token in `TOKEN`:
 TOKEN='ak_...'
 ```
 
+## Exchange The Seed Token
+
+Exchange the opaque API token for an authkit access JWT:
+
+```sh
+ACCESS_TOKEN="$(
+	curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+		http://localhost:8080/auth/token | jq -r .access_token
+)"
+```
+
 ## Call An Allowed Route
 
 Request the note that the seeded policy allows:
 
 ```sh
-curl -H "Authorization: Bearer $TOKEN" \
+curl -H "Authorization: Bearer $ACCESS_TOKEN" \
   http://localhost:8080/notes/allowed
 ```
 
@@ -63,11 +74,11 @@ This note is readable by the seeded service principal.
 Request a note outside the seeded policy:
 
 ```sh
-curl -i -H "Authorization: Bearer $TOKEN" \
+curl -i -H "Authorization: Bearer $ACCESS_TOKEN" \
   http://localhost:8080/notes/denied
 ```
 
-The service returns `403 Forbidden`. The same token authenticated successfully,
+The service returns `403 Forbidden`. The access JWT authenticated successfully,
 but the resolved principal was not authorized for that resource.
 
 ## Try A Missing Credential
@@ -86,7 +97,7 @@ request.
 You have exercised the core authkit lifecycle:
 
 ```text
-credential -> Identity -> Principal -> authorization decision -> handler
+API token -> access JWT -> Principal -> authorization decision -> handler
 ```
 
 For task-oriented setup guidance, see

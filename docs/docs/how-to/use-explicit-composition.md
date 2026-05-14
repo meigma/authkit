@@ -11,33 +11,23 @@ construction, ordering, middleware options, or non-standard runtime wiring.
 ## Build Authenticators
 
 ```go
-tokenAuthenticator, err := apikey.NewAuthenticator(tokenService)
-if err != nil {
-	return err
-}
-
-oidcAuthenticator, err := oidc.NewAuthenticator(
-	providerSource,
-	oidc.WithForwardedClaims("email", "name"),
-)
+accessAuthenticator, err := accessjwtauth.NewAuthenticator(accessVerifier, principalFinder)
 if err != nil {
 	return err
 }
 ```
 
-Authenticator order matters because API tokens and OIDC JWTs both use the
-`Authorization: Bearer ...` header. The pipeline tries authenticators in the
-order supplied.
+API tokens are exchanged for access JWTs before they reach protected-resource
+middleware. Runtime resource routes should authenticate authkit-issued access
+JWTs.
 
 ## Build The Pipeline
 
 ```go
 pipeline, err := authkit.NewPipeline(authkit.PipelineOptions{
-	Authenticators: []authkit.Authenticator{
-		tokenAuthenticator,
-		oidcAuthenticator,
+	PrincipalAuthenticators: []authkit.PrincipalAuthenticator{
+		accessAuthenticator,
 	},
-	Resolver:   principalResolver,
 	Authorizer: authorizer,
 })
 if err != nil {
@@ -45,9 +35,9 @@ if err != nil {
 }
 ```
 
-The resolver maps external identities to internal principals. The authorizer
-receives an authorization check containing the resolved principal, action,
-resource, and optional facts.
+The access JWT authenticator verifies the bearer token and loads the principal.
+The authorizer receives an authorization check containing that principal,
+action, resource, and optional facts.
 
 ## Build HTTP Middleware
 

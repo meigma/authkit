@@ -16,12 +16,21 @@ For root data types and request shapes, see
 ### `authkit.Authenticator`
 
 Verifies a request credential and returns an external identity. Implement this
-for a custom credential source.
+for an external credential source that has not yet moved behind an exchange
+flow.
 
 Provided adapters:
 
-- `apikey.NewAuthenticator`
 - `oidc.NewAuthenticator`
+
+### `authkit.PrincipalAuthenticator`
+
+Verifies a request credential and returns an internal principal. Use this for
+protected-resource routes that accept authkit-issued access JWTs.
+
+Provided adapters:
+
+- `accessjwtauth.NewAuthenticator`
 
 ### `authkit.PrincipalResolver`
 
@@ -89,7 +98,7 @@ scripts, or migrations.
 Links external identities to internal principals.
 
 The `management` package composes these ports with API-token issuing and
-revocation for setup workflows.
+revocation for setup and exchange workflows.
 
 ## Explicit Onboarding
 

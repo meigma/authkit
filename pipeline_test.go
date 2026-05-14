@@ -7,14 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/meigma/authkit"
-	"github.com/meigma/authkit/apikey"
-	"github.com/meigma/authkit/store/memory"
 )
 
 func testIdentity() authkit.Identity {
@@ -595,48 +592,6 @@ func TestPipelineAuthorizePassesThroughContextErrors(t *testing.T) {
 
 	require.ErrorIs(t, err, context.Canceled)
 	assert.NotErrorIs(t, err, authkit.ErrInternal)
-}
-
-func TestPipelineAuthenticateWithAPITokenAndMemoryStore(t *testing.T) {
-	now := time.Date(2026, time.May, 7, 18, 0, 0, 0, time.UTC)
-	store := memory.NewStore()
-	tokenService, err := apikey.NewService(store, apikey.WithClock(func() time.Time {
-		return now
-	}))
-	require.NoError(t, err)
-	tokenAuthenticator, err := apikey.NewAuthenticator(tokenService)
-	require.NoError(t, err)
-	principal, err := store.CreatePrincipal(context.Background(), authkit.CreatePrincipalRequest{
-		Kind:        authkit.PrincipalKindService,
-		DisplayName: "deploy service",
-	})
-	require.NoError(t, err)
-	issued, err := tokenService.IssueToken(context.Background(), apikey.IssueRequest{
-		PrincipalID: principal.ID,
-		Name:        "deploy token",
-		ExpiresAt:   now.Add(time.Hour),
-	})
-	require.NoError(t, err)
-	_, err = store.LinkIdentity(context.Background(), issued.IdentityLink)
-	require.NoError(t, err)
-	pipeline := newTestPipeline(t, authkit.PipelineOptions{
-		Authenticators: []authkit.Authenticator{tokenAuthenticator},
-		Resolver:       store,
-		Authorizer:     allowAuthorizer(),
-	})
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "Bearer "+issued.Plaintext)
-
-	authentication, err := pipeline.Authenticate(context.Background(), req)
-
-	require.NoError(t, err)
-	assert.Equal(t, apikey.Provider, authentication.AuthenticatorName)
-	assert.Equal(t, authkit.Identity{
-		Provider:     apikey.Provider,
-		Subject:      issued.ID,
-		CredentialID: issued.ID,
-	}, authentication.Identity)
-	assert.Equal(t, principal, authentication.Principal)
 }
 
 func newTestPipeline(t *testing.T, opts authkit.PipelineOptions) *authkit.Pipeline {

@@ -2,24 +2,19 @@ package compose_test
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
-	"github.com/lestrrat-go/jwx/v3/jwa"
-	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/meigma/authkit"
 	"github.com/meigma/authkit/accessjwt"
-	"github.com/meigma/authkit/apikey"
 	"github.com/meigma/authkit/compose"
 	"github.com/meigma/authkit/httpauth"
+	"github.com/meigma/authkit/internal/authtest"
 	"github.com/meigma/authkit/oidc"
 	"github.com/meigma/authkit/store/memory"
 )
@@ -246,40 +241,6 @@ func TestNewHTTPAppliesMiddlewareOptions(t *testing.T) {
 	assert.Contains(t, recorder.Body.String(), "custom auth error")
 }
 
-func TestAPITokenSpecBuildsUsableAuthenticator(t *testing.T) {
-	ctx := context.Background()
-	store := memory.NewStore()
-	principal, err := store.CreatePrincipal(ctx, authkit.CreatePrincipalRequest{
-		Kind:        authkit.PrincipalKindService,
-		DisplayName: "test service",
-	})
-	require.NoError(t, err)
-	tokenService, err := apikey.NewService(store)
-	require.NoError(t, err)
-	issued, err := tokenService.IssueToken(ctx, apikey.IssueRequest{
-		PrincipalID: principal.ID,
-		Name:        "test token",
-		ExpiresAt:   time.Now().Add(time.Hour),
-	})
-	require.NoError(t, err)
-	_, err = store.LinkIdentity(ctx, issued.IdentityLink)
-	require.NoError(t, err)
-	kit, err := compose.NewHTTP(compose.HTTPOptions{
-		Authenticators: []compose.AuthenticatorSpec{
-			compose.APIToken(tokenService),
-		},
-		Resolver:   store,
-		Authorizer: testAuthorizer{},
-	})
-	require.NoError(t, err)
-
-	authentication, err := kit.Pipeline.Authenticate(ctx, requestWithBearer(issued.Plaintext))
-
-	require.NoError(t, err)
-	assert.Equal(t, apikey.Provider, authentication.Identity.Provider)
-	assert.Equal(t, principal.ID, authentication.Principal.ID)
-}
-
 func TestOIDCSpecBuildsAuthenticator(t *testing.T) {
 	source, err := oidc.NewStaticProviderSource()
 	require.NoError(t, err)
@@ -303,11 +264,6 @@ func TestHelperSpecsWrapConstructorErrors(t *testing.T) {
 		spec compose.AuthenticatorSpec
 		want string
 	}{
-		{
-			name: "API token service is required",
-			spec: compose.APIToken(nil),
-			want: "compose: build authenticator 0: apikey: service is required",
-		},
 		{
 			name: "OIDC provider source is required",
 			spec: compose.OIDC(nil),
@@ -434,36 +390,5 @@ func requestWithBearer(token string) *http.Request {
 func newAccessJWTIssuerAndVerifier(t *testing.T) (*accessjwt.Issuer, *accessjwt.Verifier) {
 	t.Helper()
 
-	rawKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-	privateKey, err := jwk.Import(rawKey)
-	require.NoError(t, err)
-	require.NoError(t, privateKey.Set(jwk.KeyIDKey, "test-key"))
-	require.NoError(t, privateKey.Set(jwk.AlgorithmKey, jwa.RS256()))
-	publicKey, err := jwk.PublicKeyOf(privateKey)
-	require.NoError(t, err)
-	keySet := jwk.NewSet()
-	require.NoError(t, keySet.AddKey(publicKey))
-
-	issuer, err := accessjwt.NewIssuer(accessjwt.IssuerOptions{
-		Issuer:     "https://auth.example.test",
-		Audience:   "notes-api",
-		TTL:        time.Hour,
-		SigningKey: privateKey,
-		Clock: func() time.Time {
-			return time.Date(2026, time.May, 13, 22, 0, 0, 0, time.UTC)
-		},
-	})
-	require.NoError(t, err)
-	verifier, err := accessjwt.NewVerifier(accessjwt.VerifierOptions{
-		Issuer:   "https://auth.example.test",
-		Audience: "notes-api",
-		KeySet:   keySet,
-		Clock: func() time.Time {
-			return time.Date(2026, time.May, 13, 22, 0, 0, 0, time.UTC)
-		},
-	})
-	require.NoError(t, err)
-
-	return issuer, verifier
+	return authtest.NewAccessJWTIssuerAndVerifier(t)
 }

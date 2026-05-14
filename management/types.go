@@ -1,12 +1,8 @@
 package management
 
-import (
-	"time"
+import "time"
 
-	"github.com/meigma/authkit"
-)
-
-// IssueAPITokenRequest describes a request to issue and link an API token.
+// IssueAPITokenRequest describes a request to issue an API token.
 type IssueAPITokenRequest struct {
 	// PrincipalID identifies the principal the token should authenticate as.
 	PrincipalID string
@@ -18,17 +14,17 @@ type IssueAPITokenRequest struct {
 	ExpiresAt time.Time
 }
 
-// IssuedAPIToken describes an issued and linked API token.
+// IssuedAPIToken describes an issued API token.
 type IssuedAPIToken struct {
 	// ID is the stable lookup identifier embedded in the token.
 	ID string
+
+	// PrincipalID identifies the principal the token authenticates as.
+	PrincipalID string
 
 	// Plaintext is the full token secret shown once to the caller.
 	Plaintext string
 
 	// ExpiresAt is the time after which the token must no longer authenticate.
 	ExpiresAt time.Time
-
-	// Identity is the external identity link persisted for this token.
-	Identity authkit.ExternalIdentity
 }

@@ -1375,21 +1375,14 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 			ExpiresAt:   now.Add(time.Hour),
 		})
 		require.NoError(t, err)
-		_, err = store.LinkIdentity(context.Background(), issued.IdentityLink)
-		require.NoError(t, err)
 
-		//nolint:staticcheck // Verifies the deprecated identity compatibility path.
-		identity, err := service.VerifyToken(
-			context.Background(),
-			issued.Plaintext,
-		)
+		verified, err := service.VerifyAPIToken(context.Background(), issued.Plaintext)
 		require.NoError(t, err)
-		require.NotNil(t, identity)
-		resolved, err := store.ResolveIdentity(context.Background(), *identity)
-
-		require.NoError(t, err)
-		require.NotNil(t, resolved)
-		assert.Equal(t, principal, *resolved)
+		assert.Equal(t, apikey.VerifiedToken{
+			ID:          issued.ID,
+			PrincipalID: principal.ID,
+			ExpiresAt:   issued.ExpiresAt,
+		}, verified)
 	})
 }
 

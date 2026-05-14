@@ -76,11 +76,6 @@ func (s *Service) IssueToken(ctx context.Context, req IssueRequest) (IssuedToken
 		ID:        tokenID,
 		Plaintext: plaintext,
 		ExpiresAt: req.ExpiresAt,
-		IdentityLink: authkit.LinkIdentityRequest{
-			Provider:    Provider,
-			Subject:     tokenID,
-			PrincipalID: req.PrincipalID,
-		},
 	}, nil
 }
 
@@ -125,22 +120,6 @@ func (s *Service) VerifyAPIToken(ctx context.Context, plaintext string) (Verifie
 		ID:          tokenID,
 		PrincipalID: stored.PrincipalID,
 		ExpiresAt:   stored.ExpiresAt,
-	}, nil
-}
-
-// VerifyToken authenticates plaintext and returns its external identity.
-//
-// Deprecated: use VerifyAPIToken with exchange.APITokenExchanger for access JWT exchange.
-func (s *Service) VerifyToken(ctx context.Context, plaintext string) (*authkit.Identity, error) {
-	verified, err := s.VerifyAPIToken(ctx, plaintext)
-	if err != nil {
-		return nil, err
-	}
-
-	return &authkit.Identity{
-		Provider:     Provider,
-		Subject:      verified.ID,
-		CredentialID: verified.ID,
 	}, nil
 }
 

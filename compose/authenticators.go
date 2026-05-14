@@ -4,7 +4,6 @@ import (
 	"github.com/meigma/authkit"
 	"github.com/meigma/authkit/accessjwt"
 	"github.com/meigma/authkit/accessjwtauth"
-	"github.com/meigma/authkit/apikey"
 	"github.com/meigma/authkit/oidc"
 )
 
@@ -51,19 +50,6 @@ func Existing(authenticator authkit.Authenticator) AuthenticatorSpec {
 
 func (s existingAuthenticatorSpec) BuildAuthenticator() (authkit.Authenticator, error) {
 	return s.authenticator, nil
-}
-
-type apiTokenAuthenticatorSpec struct {
-	service *apikey.Service
-}
-
-// APIToken configures an API-token authenticator from service.
-func APIToken(service *apikey.Service) AuthenticatorSpec {
-	return apiTokenAuthenticatorSpec{service: service}
-}
-
-func (s apiTokenAuthenticatorSpec) BuildAuthenticator() (authkit.Authenticator, error) {
-	return apikey.NewAuthenticator(s.service)
 }
 
 type oidcAuthenticatorSpec struct {

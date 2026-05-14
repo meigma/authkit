@@ -2,14 +2,10 @@ package exchange_test
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	"errors"
 	"testing"
 	"time"
 
-	"github.com/lestrrat-go/jwx/v3/jwa"
-	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -17,13 +13,11 @@ import (
 	"github.com/meigma/authkit/accessjwt"
 	"github.com/meigma/authkit/apikey"
 	"github.com/meigma/authkit/exchange"
+	"github.com/meigma/authkit/internal/authtest"
 	"github.com/meigma/authkit/store/memory"
 )
 
 const (
-	testIssuer      = "https://auth.example.test"
-	testAudience    = "notes-api"
-	testKeyID       = "key-1"
 	testPrincipalID = "principal_1"
 	testTokenID     = "access-token-123"
 )
@@ -280,37 +274,12 @@ func newAPITokenExchanger(t *testing.T, opts exchange.APITokenOptions) *exchange
 func newAccessJWTIssuerAndVerifier(t *testing.T) (*accessjwt.Issuer, *accessjwt.Verifier) {
 	t.Helper()
 
-	rawKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-	signingKey, err := jwk.Import(rawKey)
-	require.NoError(t, err)
-	require.NoError(t, signingKey.Set(jwk.KeyIDKey, testKeyID))
-	require.NoError(t, signingKey.Set(jwk.AlgorithmKey, jwa.RS256()))
-	publicKey, err := jwk.PublicKeyOf(signingKey)
-	require.NoError(t, err)
-	keySet := jwk.NewSet()
-	require.NoError(t, keySet.AddKey(publicKey))
-
-	issuer, err := accessjwt.NewIssuer(accessjwt.IssuerOptions{
-		Issuer:     testIssuer,
-		Audience:   testAudience,
-		TTL:        time.Hour,
-		SigningKey: signingKey,
-		Clock:      fixedTime,
-		TokenID: func() (string, error) {
+	return authtest.NewAccessJWTIssuerAndVerifier(
+		t,
+		authtest.WithAccessJWTTokenID(func() (string, error) {
 			return testTokenID, nil
-		},
-	})
-	require.NoError(t, err)
-	verifier, err := accessjwt.NewVerifier(accessjwt.VerifierOptions{
-		Issuer:   testIssuer,
-		Audience: testAudience,
-		KeySet:   keySet,
-		Clock:    fixedTime,
-	})
-	require.NoError(t, err)
-
-	return issuer, verifier
+		}),
+	)
 }
 
 type fakeAPITokenVerifier struct {
@@ -350,5 +319,5 @@ func (f fakeAccessTokenIssuer) IssueToken(
 }
 
 func fixedTime() time.Time {
-	return time.Date(2026, time.May, 13, 23, 0, 0, 0, time.UTC)
+	return authtest.FixedTime()
 }

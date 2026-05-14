@@ -12,46 +12,36 @@ local role or Casbin policy setup, and management workflows.
 
 ## Prerequisites
 
-- A principal resolver, such as `store/memory.Store` or `store/postgres.Store`
-- At least one authenticator source, such as an API-token service or OIDC
-  provider source
+- A principal finder, such as `store/memory.Store` or `store/postgres.Store`
+- An `accessjwt.Verifier` configured for authkit-issued access JWTs
 - An authorizer, such as `roleauth.NewAuthorizer` or `casbin.NewAuthorizer`
 
-## Create The Store And Token Service
+API tokens are exchange credentials. Keep API-token verification in an
+application-owned exchange route and protect resource routes with access JWTs.
+
+## Create The Store
 
 ```go
 store := memory.NewStore()
-
-tokenService, err := apikey.NewService(store)
-if err != nil {
-	return err
-}
 ```
 
 Use `store/postgres` instead of `store/memory` for production persistence after
 running the Postgres migrations.
 
-## Configure Provider Trust
-
-Use a static provider source, a mutable store, or an application-owned source:
+## Configure Access JWT Verification
 
 ```go
-oidcSource, err := oidc.NewStaticProviderSource(oidc.Provider{
-	Issuer:    "https://issuer.example",
-	Audiences: []string{"notes-api"},
-	JWKSURL:   "https://issuer.example/.well-known/jwks.json",
-	ForwardedClaims: []authkit.ClaimPath{
-		{"email"},
-		{"groups"},
-	},
+accessVerifier, err := accessjwt.NewVerifier(accessjwt.VerifierOptions{
+	Issuer:   "https://auth.example",
+	Audience: "notes-api",
+	KeySet:   keySet,
 })
 if err != nil {
 	return err
 }
 ```
 
-For mutable provider trust and provisioning rules, see
-[How to auto-provision OIDC principals](auto-provision-oidc-principals.md).
+Your exchange routes should issue matching tokens with `accessjwt.Issuer`.
 
 ## Configure Authorization
 
@@ -81,11 +71,9 @@ if err != nil {
 
 ```go
 kit, err := compose.NewHTTP(compose.HTTPOptions{
-	Authenticators: []compose.AuthenticatorSpec{
-		compose.APIToken(tokenService),
-		compose.OIDC(oidcSource),
+	PrincipalAuthenticators: []compose.PrincipalAuthenticatorSpec{
+		compose.AccessJWT(accessVerifier, store),
 	},
-	Resolver:   store,
 	Authorizer: authorizer,
 })
 if err != nil {

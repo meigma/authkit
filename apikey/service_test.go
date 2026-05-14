@@ -4,8 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -38,11 +36,6 @@ func TestServiceIssueToken(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, issued.ID)
 	assert.Equal(t, expiresAt, issued.ExpiresAt)
-	assert.Equal(t, authkit.LinkIdentityRequest{
-		Provider:    apikey.Provider,
-		Subject:     issued.ID,
-		PrincipalID: testPrincipalID,
-	}, issued.IdentityLink)
 	require.True(t, strings.HasPrefix(issued.Plaintext, "ak_"+issued.ID+"_"))
 	require.Len(t, strings.Split(issued.Plaintext, "_"), tokenParts)
 
@@ -107,22 +100,6 @@ func TestServiceVerifyAPIToken(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, stored.LastUsedAt)
 	assert.Equal(t, now, *stored.LastUsedAt)
-}
-
-func TestServiceVerifyToken(t *testing.T) {
-	now := fixedTime()
-	service, _ := newService(t, now)
-	issued := issueToken(t, service, now.Add(time.Hour))
-
-	identity, err := service.VerifyToken(context.Background(), issued.Plaintext)
-
-	require.NoError(t, err)
-	require.NotNil(t, identity)
-	assert.Equal(t, &authkit.Identity{
-		Provider:     apikey.Provider,
-		Subject:      issued.ID,
-		CredentialID: issued.ID,
-	}, identity)
 }
 
 func TestServiceVerifyAPITokenRejectsInvalidTokens(t *testing.T) {
@@ -199,107 +176,15 @@ func TestServiceRevokeToken(t *testing.T) {
 	require.NotNil(t, stored.RevokedAt)
 	assert.Equal(t, now, *stored.RevokedAt)
 
-	identity, err := service.VerifyToken(context.Background(), issued.Plaintext)
+	verified, err := service.VerifyAPIToken(context.Background(), issued.Plaintext)
 	require.ErrorIs(t, err, authkit.ErrUnauthenticated)
-	assert.Nil(t, identity)
-}
-
-func TestAuthenticatorAcceptsBearerSchemeCaseInsensitively(t *testing.T) {
-	now := fixedTime()
-	service, _ := newService(t, now)
-	issued := issueToken(t, service, now.Add(time.Hour))
-	authenticator, err := apikey.NewAuthenticator(service)
-	require.NoError(t, err)
-	assert.Equal(t, apikey.Provider, authenticator.Name())
-
-	tests := []struct {
-		name   string
-		scheme string
-	}{
-		{name: "canonical", scheme: "Bearer"},
-		{name: "lowercase", scheme: "bearer"},
-		{name: "mixed case", scheme: "bEaReR"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
-			req.Header.Set("Authorization", tt.scheme+" "+issued.Plaintext)
-
-			identity, err := authenticator.Authenticate(context.Background(), req)
-
-			require.NoError(t, err)
-			require.NotNil(t, identity)
-			assert.Equal(t, issued.ID, identity.Subject)
-		})
-	}
-}
-
-func TestAuthenticatorRejectsInvalidHeaders(t *testing.T) {
-	now := fixedTime()
-	service, _ := newService(t, now)
-	authenticator, err := apikey.NewAuthenticator(service)
-	require.NoError(t, err)
-
-	tests := []struct {
-		name   string
-		header string
-	}{
-		{name: "missing"},
-		{name: "wrong scheme", header: "Basic token"},
-		{name: "empty bearer", header: "Bearer "},
-		{name: "extra fields", header: "Bearer token extra"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
-			if tt.header != "" {
-				req.Header.Set("Authorization", tt.header)
-			}
-
-			identity, err := authenticator.Authenticate(context.Background(), req)
-
-			require.ErrorIs(t, err, authkit.ErrUnauthenticated)
-			assert.Nil(t, identity)
-		})
-	}
-}
-
-func TestTokenIdentityResolvesThroughMemoryStore(t *testing.T) {
-	now := fixedTime()
-	store := memory.NewStore()
-	service, err := apikey.NewService(store, apikey.WithClock(func() time.Time {
-		return now
-	}))
-	require.NoError(t, err)
-	principal, err := store.CreatePrincipal(context.Background(), authkit.CreatePrincipalRequest{
-		Kind:        authkit.PrincipalKindService,
-		DisplayName: "deploy service",
-	})
-	require.NoError(t, err)
-	issued := issueTokenForPrincipal(t, service, principal.ID, now.Add(time.Hour))
-	_, err = store.LinkIdentity(context.Background(), issued.IdentityLink)
-	require.NoError(t, err)
-
-	identity, err := service.VerifyToken(context.Background(), issued.Plaintext)
-	require.NoError(t, err)
-	require.NotNil(t, identity)
-	resolved, err := store.ResolveIdentity(context.Background(), *identity)
-
-	require.NoError(t, err)
-	require.NotNil(t, resolved)
-	assert.Equal(t, principal, *resolved)
+	assert.Empty(t, verified)
 }
 
 func TestConstructorsValidateRequiredDependencies(t *testing.T) {
 	service, err := apikey.NewService(nil)
 	require.Error(t, err)
 	assert.Nil(t, service)
-
-	authenticator, err := apikey.NewAuthenticator(nil)
-	require.Error(t, err)
-	assert.Nil(t, authenticator)
 }
 
 func newService(t *testing.T, now time.Time) (*apikey.Service, *memory.Store) {
