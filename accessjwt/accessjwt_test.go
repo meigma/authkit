@@ -252,6 +252,21 @@ func TestVerifyTokenRejectsInvalidTokens(t *testing.T) {
 	}
 }
 
+func TestVerifyTokenRejectsCriticalHeaders(t *testing.T) {
+	privateKey, publicKey := newRSAKeyPair(t)
+	verifier, err := NewVerifier(verifierOptions(newKeySet(t, publicKey), nil))
+	require.NoError(t, err)
+	token := signTokenWithHeaders(t, privateKey, baseClaims(), func(headers jws.Headers) {
+		require.NoError(t, headers.Set("x-authkit-required", true))
+		require.NoError(t, headers.Set(jws.CriticalKey, []string{"x-authkit-required"}))
+	})
+
+	verified, err := verifier.VerifyToken(context.Background(), token)
+
+	require.ErrorIs(t, err, authkit.ErrUnauthenticated)
+	assert.Empty(t, verified)
+}
+
 func TestVerifiedTokenUsesStorageBackedAuthorization(t *testing.T) {
 	issuer, verifier, _ := newIssuerAndVerifier(t)
 	store := memory.NewStore()
@@ -407,6 +422,31 @@ func signToken(
 	}
 	headers := jws.NewHeaders()
 	require.NoError(t, headers.Set(jws.TypeKey, tokenType))
+	signed, err := jwt.Sign(token, jwt.WithKey(algorithm, key, jws.WithProtectedHeaders(headers)))
+	require.NoError(t, err)
+
+	return string(signed)
+}
+
+func signTokenWithHeaders(
+	t *testing.T,
+	key jwk.Key,
+	claims map[string]any,
+	mutate func(jws.Headers),
+) string {
+	t.Helper()
+
+	algorithm, err := signatureAlgorithm(DefaultAlgorithm)
+	require.NoError(t, err)
+	token := jwt.New()
+	for name, value := range claims {
+		require.NoError(t, token.Set(name, value))
+	}
+	headers := jws.NewHeaders()
+	require.NoError(t, headers.Set(jws.TypeKey, TokenType))
+	if mutate != nil {
+		mutate(headers)
+	}
 	signed, err := jwt.Sign(token, jwt.WithKey(algorithm, key, jws.WithProtectedHeaders(headers)))
 	require.NoError(t, err)
 

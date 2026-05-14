@@ -134,6 +134,9 @@ func (v *Verifier) validateProtectedHeaders(raw []byte) error {
 	if _, ok := v.allowedAlgorithms[algorithm.String()]; !ok {
 		return errors.New("JWT algorithm is not allowed")
 	}
+	if critical, ok := headers.Critical(); ok && len(critical) > 0 {
+		return errors.New("JWT critical headers are not supported")
+	}
 
 	return nil
 }
