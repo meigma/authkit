@@ -37,6 +37,18 @@ type IssuedToken struct {
 	IdentityLink authkit.LinkIdentityRequest
 }
 
+// VerifiedToken describes a successfully verified API token.
+type VerifiedToken struct {
+	// ID is the stable lookup identifier embedded in the token.
+	ID string
+
+	// PrincipalID identifies the principal the token authenticates as.
+	PrincipalID string
+
+	// ExpiresAt is the time after which the token must no longer authenticate.
+	ExpiresAt time.Time
+}
+
 // TokenMetadata describes an API token without its secret material.
 type TokenMetadata struct {
 	// ID is the stable lookup identifier embedded in the token.

@@ -1378,7 +1378,11 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 		_, err = store.LinkIdentity(context.Background(), issued.IdentityLink)
 		require.NoError(t, err)
 
-		identity, err := service.VerifyToken(context.Background(), issued.Plaintext)
+		//nolint:staticcheck // Verifies the deprecated identity compatibility path.
+		identity, err := service.VerifyToken(
+			context.Background(),
+			issued.Plaintext,
+		)
 		require.NoError(t, err)
 		require.NotNil(t, identity)
 		resolved, err := store.ResolveIdentity(context.Background(), *identity)

@@ -967,7 +967,11 @@ func TestServiceIssueAPITokenResolvesThroughMemoryStore(t *testing.T) {
 		ExpiresAt:   now.Add(time.Hour),
 	})
 	require.NoError(t, err)
-	identity, err := tokenService.VerifyToken(context.Background(), issued.Plaintext)
+	//nolint:staticcheck // Verifies the deprecated identity compatibility path.
+	identity, err := tokenService.VerifyToken(
+		context.Background(),
+		issued.Plaintext,
+	)
 	require.NoError(t, err)
 	require.NotNil(t, identity)
 	resolved, err := store.ResolveIdentity(context.Background(), *identity)

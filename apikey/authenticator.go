@@ -12,6 +12,8 @@ import (
 const bearerScheme = "Bearer"
 
 // Authenticator verifies API tokens from HTTP Authorization headers.
+//
+// Deprecated: use VerifyAPIToken with exchange.APITokenExchanger for access JWT exchange.
 type Authenticator struct {
 	service *Service
 }

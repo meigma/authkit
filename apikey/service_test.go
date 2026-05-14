@@ -89,9 +89,29 @@ func TestServiceIssueTokenValidatesRequest(t *testing.T) {
 	}
 }
 
-func TestServiceVerifyToken(t *testing.T) {
+func TestServiceVerifyAPIToken(t *testing.T) {
 	now := fixedTime()
 	service, store := newService(t, now)
+	issued := issueToken(t, service, now.Add(time.Hour))
+
+	verified, err := service.VerifyAPIToken(context.Background(), issued.Plaintext)
+
+	require.NoError(t, err)
+	assert.Equal(t, apikey.VerifiedToken{
+		ID:          issued.ID,
+		PrincipalID: testPrincipalID,
+		ExpiresAt:   issued.ExpiresAt,
+	}, verified)
+
+	stored, err := store.FindToken(context.Background(), issued.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored.LastUsedAt)
+	assert.Equal(t, now, *stored.LastUsedAt)
+}
+
+func TestServiceVerifyToken(t *testing.T) {
+	now := fixedTime()
+	service, _ := newService(t, now)
 	issued := issueToken(t, service, now.Add(time.Hour))
 
 	identity, err := service.VerifyToken(context.Background(), issued.Plaintext)
@@ -103,14 +123,9 @@ func TestServiceVerifyToken(t *testing.T) {
 		Subject:      issued.ID,
 		CredentialID: issued.ID,
 	}, identity)
-
-	stored, err := store.FindToken(context.Background(), issued.ID)
-	require.NoError(t, err)
-	require.NotNil(t, stored.LastUsedAt)
-	assert.Equal(t, now, *stored.LastUsedAt)
 }
 
-func TestServiceVerifyTokenRejectsInvalidTokens(t *testing.T) {
+func TestServiceVerifyAPITokenRejectsInvalidTokens(t *testing.T) {
 	now := fixedTime()
 	service, _ := newService(t, now)
 	issued := issueToken(t, service, now.Add(time.Hour))
@@ -129,15 +144,15 @@ func TestServiceVerifyTokenRejectsInvalidTokens(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			identity, err := service.VerifyToken(context.Background(), tt.plaintext)
+			verified, err := service.VerifyAPIToken(context.Background(), tt.plaintext)
 
 			require.ErrorIs(t, err, authkit.ErrUnauthenticated)
-			assert.Nil(t, identity)
+			assert.Empty(t, verified)
 		})
 	}
 }
 
-func TestServiceVerifyTokenRejectsExpiredToken(t *testing.T) {
+func TestServiceVerifyAPITokenRejectsExpiredToken(t *testing.T) {
 	now := fixedTime()
 	current := now
 	service, _ := newServiceWithClock(t, func() time.Time {
@@ -146,13 +161,13 @@ func TestServiceVerifyTokenRejectsExpiredToken(t *testing.T) {
 	issued := issueToken(t, service, now.Add(time.Hour))
 	current = now.Add(time.Hour)
 
-	identity, err := service.VerifyToken(context.Background(), issued.Plaintext)
+	verified, err := service.VerifyAPIToken(context.Background(), issued.Plaintext)
 
 	require.ErrorIs(t, err, authkit.ErrUnauthenticated)
-	assert.Nil(t, identity)
+	assert.Empty(t, verified)
 }
 
-func TestServiceVerifyTokenIgnoresLastUsedUpdateErrors(t *testing.T) {
+func TestServiceVerifyAPITokenIgnoresLastUsedUpdateErrors(t *testing.T) {
 	now := fixedTime()
 	service, store := newService(t, now)
 	issued := issueToken(t, service, now.Add(time.Hour))
@@ -164,11 +179,11 @@ func TestServiceVerifyTokenIgnoresLastUsedUpdateErrors(t *testing.T) {
 	}))
 	require.NoError(t, err)
 
-	identity, err := service.VerifyToken(context.Background(), issued.Plaintext)
+	verified, err := service.VerifyAPIToken(context.Background(), issued.Plaintext)
 
 	require.NoError(t, err)
-	require.NotNil(t, identity)
-	assert.Equal(t, issued.ID, identity.Subject)
+	assert.Equal(t, issued.ID, verified.ID)
+	assert.Equal(t, testPrincipalID, verified.PrincipalID)
 }
 
 func TestServiceRevokeToken(t *testing.T) {

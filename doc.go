@@ -7,7 +7,8 @@
 // external Identity values that a PrincipalResolver maps to Principal values.
 // An Authorizer evaluates authorization checks containing the principal, action,
 // application Resource, and caller-supplied Facts. The accessjwt package issues
-// and verifies authkit-owned access JWTs, accessjwtauth adapts them to HTTP
-// bearer authentication, and roleauth authorizes from local admin-managed roles
-// and effective action grants.
+// and verifies authkit-owned access JWTs, exchange converts verified credentials
+// into access JWTs, accessjwtauth adapts access JWTs to HTTP bearer
+// authentication, and roleauth authorizes from local admin-managed roles and
+// effective action grants.
 package authkit

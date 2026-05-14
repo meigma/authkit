@@ -84,44 +84,63 @@ func (s *Service) IssueToken(ctx context.Context, req IssueRequest) (IssuedToken
 	}, nil
 }
 
-// VerifyToken authenticates plaintext and returns its external identity.
-func (s *Service) VerifyToken(ctx context.Context, plaintext string) (*authkit.Identity, error) {
+// VerifyAPIToken authenticates plaintext and returns its API-token metadata.
+func (s *Service) VerifyAPIToken(ctx context.Context, plaintext string) (VerifiedToken, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return VerifiedToken{}, err
 	}
 
 	tokenID, secret, ok := parseToken(plaintext)
 	if !ok {
-		return nil, unauthenticated("malformed token")
+		return VerifiedToken{}, unauthenticated("malformed token")
 	}
 
 	stored, err := s.store.FindToken(ctx, tokenID)
 	if errors.Is(err, ErrTokenNotFound) {
-		return nil, unauthenticated("token not found")
+		return VerifiedToken{}, unauthenticated("token not found")
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%w: find token: %w", authkit.ErrInternal, err)
+		return VerifiedToken{}, fmt.Errorf("%w: find token: %w", authkit.ErrInternal, err)
 	}
 
 	secretHash := hashSecret(secret)
 	if subtle.ConstantTimeCompare(secretHash[:], stored.SecretHash[:]) != 1 {
-		return nil, unauthenticated("token secret mismatch")
+		return VerifiedToken{}, unauthenticated("token secret mismatch")
 	}
 
 	now := s.clock()
 	if stored.RevokedAt != nil {
-		return nil, unauthenticated("token revoked")
+		return VerifiedToken{}, unauthenticated("token revoked")
 	}
 	if !now.Before(stored.ExpiresAt) {
-		return nil, unauthenticated("token expired")
+		return VerifiedToken{}, unauthenticated("token expired")
+	}
+	if stored.PrincipalID == "" {
+		return VerifiedToken{}, fmt.Errorf("%w: stored token principal ID is required", authkit.ErrInternal)
 	}
 
 	_ = s.store.UpdateTokenLastUsed(ctx, tokenID, now)
 
+	return VerifiedToken{
+		ID:          tokenID,
+		PrincipalID: stored.PrincipalID,
+		ExpiresAt:   stored.ExpiresAt,
+	}, nil
+}
+
+// VerifyToken authenticates plaintext and returns its external identity.
+//
+// Deprecated: use VerifyAPIToken with exchange.APITokenExchanger for access JWT exchange.
+func (s *Service) VerifyToken(ctx context.Context, plaintext string) (*authkit.Identity, error) {
+	verified, err := s.VerifyAPIToken(ctx, plaintext)
+	if err != nil {
+		return nil, err
+	}
+
 	return &authkit.Identity{
 		Provider:     Provider,
-		Subject:      tokenID,
-		CredentialID: tokenID,
+		Subject:      verified.ID,
+		CredentialID: verified.ID,
 	}, nil
 }
 

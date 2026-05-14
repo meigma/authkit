@@ -23,6 +23,7 @@ import (
 	"github.com/meigma/authkit/apikey"
 	authkitcasbin "github.com/meigma/authkit/casbin"
 	"github.com/meigma/authkit/compose"
+	"github.com/meigma/authkit/exchange"
 	"github.com/meigma/authkit/httpauth"
 	"github.com/meigma/authkit/store/memory"
 )
@@ -63,7 +64,7 @@ type notesApp struct {
 	handler        http.Handler
 	store          *memory.Store
 	tokenService   *apikey.Service
-	accessIssuer   *accessjwt.Issuer
+	exchanger      *exchange.APITokenExchanger
 	principal      authkit.Principal
 	seedToken      string
 	tokenExpiresAt time.Time
@@ -153,6 +154,14 @@ func newNotesApp(ctx context.Context, opts ...notesAppOption) (*notesApp, error)
 	if err != nil {
 		return nil, err
 	}
+	exchanger, err := exchange.NewAPITokenExchanger(exchange.APITokenOptions{
+		APITokens:    tokenService,
+		Principals:   store,
+		AccessTokens: accessIssuer,
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	middleware, err := newNotesMiddleware(store, accessVerifier, principal.ID)
 	if err != nil {
@@ -162,7 +171,7 @@ func newNotesApp(ctx context.Context, opts ...notesAppOption) (*notesApp, error)
 	app := &notesApp{
 		store:          store,
 		tokenService:   tokenService,
-		accessIssuer:   accessIssuer,
+		exchanger:      exchanger,
 		principal:      principal,
 		seedToken:      issued.Plaintext,
 		tokenExpiresAt: issued.ExpiresAt,
@@ -234,42 +243,11 @@ func (a *notesApp) exchangeAPIToken(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	identity, err := a.tokenService.VerifyToken(req.Context(), rawToken)
-	if err != nil {
-		writeAuthExchangeError(w, err)
-
-		return
-	}
-
-	stored, err := a.store.FindToken(req.Context(), identity.CredentialID)
-	if errors.Is(err, apikey.ErrTokenNotFound) {
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-
-		return
-	}
-	if err != nil {
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-
-		return
-	}
-
-	principal, err := a.store.FindPrincipal(req.Context(), stored.PrincipalID)
-	if errors.Is(err, authkit.ErrPrincipalNotFound) {
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-
-		return
-	}
-	if err != nil {
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-
-		return
-	}
-
-	issued, err := a.accessIssuer.IssueToken(req.Context(), accessjwt.IssueRequest{
-		PrincipalID: principal.ID,
+	result, err := a.exchanger.Exchange(req.Context(), exchange.APITokenRequest{
+		Plaintext: rawToken,
 	})
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		writeAuthExchangeError(w, err)
 
 		return
 	}
@@ -277,9 +255,9 @@ func (a *notesApp) exchangeAPIToken(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	//nolint:gosec // The exchange endpoint intentionally returns the newly issued access JWT once.
 	if err := json.NewEncoder(w).Encode(exchangeResponse{
-		Value:     issued.Plaintext,
+		Value:     result.AccessToken.Plaintext,
 		TokenType: "Bearer",
-		ExpiresAt: issued.ExpiresAt,
+		ExpiresAt: result.AccessToken.ExpiresAt,
 	}); err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 	}
