@@ -1,0 +1,19 @@
+{{define "page"}}
+<section class="page-heading">
+  <h1>Recent pastes</h1>
+  <a class="button" href="/new">Create paste</a>
+</section>
+
+{{if .Pastes}}
+  <ol class="paste-list">
+    {{range .Pastes}}
+      <li>
+        <a href="/p/{{.ID}}">{{if .Title}}{{.Title}}{{else}}Untitled paste{{end}}</a>
+        <span>{{formatTime .CreatedAt}}</span>
+      </li>
+    {{end}}
+  </ol>
+{{else}}
+  <p class="empty">No pastes yet.</p>
+{{end}}
+{{end}}

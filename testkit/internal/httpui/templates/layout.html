@@ -1,0 +1,24 @@
+{{define "content"}}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{if .Title}}{{.Title}} - {{end}}authkit testkit pastebin</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/">authkit testkit</a>
+      <nav aria-label="Primary">
+        <a href="/">Recent</a>
+        <a class="button" href="/new">New paste</a>
+        <a href="/login">Login</a>
+      </nav>
+    </header>
+    <main class="page">
+      {{template "page" .}}
+    </main>
+  </body>
+</html>
+{{end}}

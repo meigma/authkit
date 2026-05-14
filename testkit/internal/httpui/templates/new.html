@@ -1,0 +1,26 @@
+{{define "page"}}
+<section class="page-heading">
+  <h1>Create paste</h1>
+</section>
+
+{{if .Error}}
+  <p class="error" role="alert">{{.Error}}</p>
+{{end}}
+
+<form class="paste-form" method="post" action="/pastes">
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+  <label>
+    Title
+    <input name="title" value="{{.Form.Title}}" maxlength="120" autocomplete="off">
+  </label>
+  <label>
+    Syntax
+    <input name="syntax" value="{{.Form.Syntax}}" maxlength="40" autocomplete="off" placeholder="text">
+  </label>
+  <label>
+    Body
+    <textarea name="body" required autofocus>{{.Form.Body}}</textarea>
+  </label>
+  <button type="submit">Create paste</button>
+</form>
+{{end}}
