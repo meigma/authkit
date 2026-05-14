@@ -91,6 +91,18 @@ Links external identities to internal principals.
 The `management` package composes these ports with API-token issuing and
 revocation for setup workflows.
 
+## Explicit Onboarding
+
+`onboarding.NewService` composes `authkit.PrincipalFinder`,
+`authkit.IdentityLinker`, and `authkit.IdentityProvisioner` for application-owned
+onboarding flows.
+
+Use `AttachIdentity` after an application has already verified that an existing
+principal should receive a newly verified identity. Use `ProvisionPrincipal`
+when application policy has approved creating a principal for a verified
+identity. Credential method packages still own method-specific proof and
+storage; onboarding only coordinates the generic identity relationship.
+
 ## Auto-Provisioning
 
 `provisioning.NewResolver` wraps an existing `PrincipalResolver` with an

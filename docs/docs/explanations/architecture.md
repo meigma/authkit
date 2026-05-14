@@ -79,6 +79,7 @@ Adapters sit at the edges:
 
 - `apikey` issues and verifies opaque API tokens.
 - `oidc` verifies signed JWT bearer tokens from trusted issuers.
+- `onboarding` coordinates explicit identity attachment and principal provisioning.
 - `provisioning` can create principals for caller-approved unresolved identities.
 - `httpauth` adapts a pipeline to `net/http`.
 - `httpfacts` provides optional helpers for deriving facts from HTTP requests.
@@ -109,6 +110,19 @@ subject  = JWT sub
 
 A valid credential with no linked principal authenticates as a credential but
 does not become an application principal.
+
+## Explicit Onboarding
+
+Credential method packages own proof and method-specific storage. After a
+credential method verifies auth material and returns an `authkit.Identity`,
+applications can use `onboarding.Service` to attach that identity to an existing
+principal or provision a new principal for it.
+
+Onboarding is an explicit application flow. Authenticators and the runtime
+pipeline do not create principals or attach identities while handling normal
+authenticated requests. This keeps browser login, admin enrollment, recovery,
+and trust checks in application-owned code while still reusing the same generic
+identity link and principal provisioning ports.
 
 ## Auto-Provisioning
 
