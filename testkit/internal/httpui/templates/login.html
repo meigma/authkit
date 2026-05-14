@@ -1,0 +1,18 @@
+{{define "page"}}
+<section class="page-heading">
+  <h1>API token login</h1>
+</section>
+
+{{if .Error}}
+  <p class="error" role="alert">{{.Error}}</p>
+{{end}}
+
+<form class="paste-form auth-form" method="post" action="/auth/token">
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+  <label>
+    API token
+    <input name="api_token" type="password" required autofocus autocomplete="off">
+  </label>
+  <button type="submit">Continue</button>
+</form>
+{{end}}

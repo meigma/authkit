@@ -70,7 +70,7 @@ tasks:
       cache: false
 
   integration:
-    command: 'go test -tags=integration ./store/postgres'
+    command: 'go test -count 1 -tags integration ./store/postgres ./testkit/internal/store/postgres ./testkit/internal/authflow'
     toolchains: ['go']
     inputs:
       - '@group(go)'

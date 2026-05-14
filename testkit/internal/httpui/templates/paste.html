@@ -1,0 +1,15 @@
+{{define "page"}}
+<article class="paste">
+  <header class="paste-header">
+    <div>
+      <h1>{{if .Paste.Title}}{{.Paste.Title}}{{else}}Untitled paste{{end}}</h1>
+      <p>
+        <time datetime="{{.Paste.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}">{{formatTime .Paste.CreatedAt}}</time>
+        {{if .Paste.Syntax}}<span>{{.Paste.Syntax}}</span>{{end}}
+      </p>
+    </div>
+    <a class="button" href="/raw/{{.Paste.ID}}">Raw</a>
+  </header>
+  <pre><code>{{.Paste.Body}}</code></pre>
+</article>
+{{end}}
