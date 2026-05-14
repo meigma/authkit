@@ -138,23 +138,21 @@ func TestAPITokenExchangerDoesNotRequireIdentityLink(t *testing.T) {
 func TestAPITokenExchangerRejectsMissingPrincipal(t *testing.T) {
 	ctx := context.Background()
 	store := memory.NewStore()
-	apiTokens, err := apikey.NewService(store, apikey.WithClock(fixedTime))
-	require.NoError(t, err)
-	apiToken, err := apiTokens.IssueToken(ctx, apikey.IssueRequest{
-		PrincipalID: "missing",
-		Name:        "bootstrap token",
-		ExpiresAt:   fixedTime().Add(time.Hour),
-	})
-	require.NoError(t, err)
 	accessTokens, _ := newAccessJWTIssuerAndVerifier(t)
 	exchanger := newAPITokenExchanger(t, exchange.APITokenOptions{
-		APITokens:    apiTokens,
+		APITokens: fakeAPITokenVerifier{
+			token: apikey.VerifiedToken{
+				ID:          "api-token-1",
+				PrincipalID: "missing",
+				ExpiresAt:   fixedTime().Add(time.Hour),
+			},
+		},
 		Principals:   store,
 		AccessTokens: accessTokens,
 	})
 
 	result, err := exchanger.Exchange(ctx, exchange.APITokenRequest{
-		Plaintext: apiToken.Plaintext,
+		Plaintext: "ak_token_secret",
 	})
 
 	require.ErrorIs(t, err, authkit.ErrUnauthenticated)

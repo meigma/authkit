@@ -199,6 +199,10 @@ func newServiceWithClock(t *testing.T, clock func() time.Time) (*apikey.Service,
 	t.Helper()
 
 	store := memory.NewStore()
+	_, err := store.CreatePrincipal(context.Background(), authkit.CreatePrincipalRequest{
+		Kind: authkit.PrincipalKindService,
+	})
+	require.NoError(t, err)
 	service, err := apikey.NewService(store, apikey.WithClock(clock))
 	require.NoError(t, err)
 

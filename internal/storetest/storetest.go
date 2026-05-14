@@ -1340,10 +1340,12 @@ func Run(t *testing.T, newStore func(t *testing.T) Store) {
 	t.Run("token missing behavior", func(t *testing.T) {
 		store := newStore(t)
 		now := fixedStoreTime()
+		token := tokenFixture(now, "missing")
 
 		found, err := store.FindToken(context.Background(), "missing")
 		require.ErrorIs(t, err, apikey.ErrTokenNotFound)
 		assert.Empty(t, found)
+		require.ErrorIs(t, store.CreateToken(context.Background(), token), authkit.ErrPrincipalNotFound)
 
 		require.ErrorIs(
 			t,
