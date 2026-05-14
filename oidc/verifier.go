@@ -19,12 +19,11 @@ import (
 )
 
 const (
-	bearerScheme = "Bearer"
 	maxJWKSBytes = 1 << 20
 )
 
-// Authenticator verifies OIDC-issued JWT bearer tokens from HTTP requests.
-type Authenticator struct {
+// Verifier verifies OIDC-issued JWT bearer tokens from trusted providers.
+type Verifier struct {
 	source ProviderSource
 
 	httpClient      *http.Client
@@ -49,8 +48,8 @@ type keySetRequest struct {
 	err  error
 }
 
-// NewAuthenticator constructs an OIDC JWT bearer authenticator.
-func NewAuthenticator(source ProviderSource, opts ...Option) (*Authenticator, error) {
+// NewVerifier constructs an OIDC JWT bearer token verifier.
+func NewVerifier(source ProviderSource, opts ...Option) (*Verifier, error) {
 	if source == nil {
 		return nil, errors.New("oidc: provider source is required")
 	}
@@ -62,7 +61,7 @@ func NewAuthenticator(source ProviderSource, opts ...Option) (*Authenticator, er
 		}
 	}
 
-	return &Authenticator{
+	return &Verifier{
 		source:          source,
 		httpClient:      cfg.httpClient,
 		clock:           cfg.clock,
@@ -74,47 +73,36 @@ func NewAuthenticator(source ProviderSource, opts ...Option) (*Authenticator, er
 	}, nil
 }
 
-// Name returns the stable authenticator name.
-func (a *Authenticator) Name() string {
-	return Name
-}
-
-// Authenticate verifies the request's OIDC-issued JWT bearer token.
-func (a *Authenticator) Authenticate(ctx context.Context, req *http.Request) (*authkit.Identity, error) {
+// VerifyToken verifies rawToken and returns its OIDC identity.
+func (v *Verifier) VerifyToken(ctx context.Context, rawToken string) (authkit.Identity, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return authkit.Identity{}, err
 	}
-	if req == nil {
-		return nil, unauthenticated("request is required")
+	if rawToken == "" {
+		return authkit.Identity{}, unauthenticated("token is required")
 	}
-
-	rawToken, err := bearerToken(req)
-	if err != nil {
-		return nil, err
-	}
-
 	issuer, err := unverifiedIssuer(rawToken)
 	if err != nil {
-		return nil, err
+		return authkit.Identity{}, err
 	}
 
-	provider, err := a.source.FindProvider(ctx, issuer)
+	provider, err := v.source.FindProvider(ctx, issuer)
 	if errors.Is(err, ErrProviderNotFound) {
-		return nil, unauthenticated("issuer is not trusted")
+		return authkit.Identity{}, unauthenticated("issuer is not trusted")
 	}
 	if err != nil {
-		return nil, fmt.Errorf("oidc: find provider: %w", err)
+		return authkit.Identity{}, fmt.Errorf("oidc: find provider: %w", err)
 	}
 	if provider.Issuer != issuer {
-		return nil, unauthenticated("provider issuer mismatch")
+		return authkit.Identity{}, unauthenticated("provider issuer mismatch")
 	}
 	if validationErr := provider.Validate(); validationErr != nil {
-		return nil, fmt.Errorf("oidc: invalid provider: %w", validationErr)
+		return authkit.Identity{}, fmt.Errorf("oidc: invalid provider: %w", validationErr)
 	}
 
-	set, err := a.keySet(ctx, provider)
+	set, err := v.keySet(ctx, provider)
 	if err != nil {
-		return nil, err
+		return authkit.Identity{}, err
 	}
 
 	token, err := jwt.Parse(
@@ -123,41 +111,31 @@ func (a *Authenticator) Authenticate(ctx context.Context, req *http.Request) (*a
 		jwt.WithIssuer(provider.Issuer),
 		jwt.WithRequiredClaim(jwt.SubjectKey),
 		jwt.WithRequiredClaim(jwt.ExpirationKey),
-		jwt.WithClock(jwt.ClockFunc(a.clock)),
-		jwt.WithAcceptableSkew(a.acceptableSkew),
+		jwt.WithClock(jwt.ClockFunc(v.clock)),
+		jwt.WithAcceptableSkew(v.acceptableSkew),
 	)
 	if err != nil {
-		return nil, unauthenticated("JWT verification failed")
+		return authkit.Identity{}, unauthenticated("JWT verification failed")
 	}
 
 	subject, ok := token.Subject()
 	if !ok || subject == "" {
-		return nil, unauthenticated("subject claim is required")
+		return authkit.Identity{}, unauthenticated("subject claim is required")
 	}
 	if !audienceAllowed(token, provider.Audiences) {
-		return nil, unauthenticated("audience is not accepted")
+		return authkit.Identity{}, unauthenticated("audience is not accepted")
 	}
 
-	identity := &authkit.Identity{
+	identity := authkit.Identity{
 		Provider: provider.Issuer,
 		Subject:  subject,
-		Claims:   a.forwardClaims(token, provider),
+		Claims:   v.forwardClaims(token, provider),
 	}
 	if jwtID, ok := token.JwtID(); ok {
 		identity.CredentialID = jwtID
 	}
 
 	return identity, nil
-}
-
-func bearerToken(req *http.Request) (string, error) {
-	header := req.Header.Get("Authorization")
-	parts := strings.Fields(header)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], bearerScheme) {
-		return "", unauthenticated("bearer token is required")
-	}
-
-	return parts[1], nil
 }
 
 func unverifiedIssuer(rawToken string) (string, error) {
@@ -193,8 +171,8 @@ func audienceAllowed(token jwt.Token, audiences []string) bool {
 	return false
 }
 
-func (a *Authenticator) forwardClaims(token jwt.Token, provider Provider) map[string]any {
-	paths := mergedForwardedClaims(provider.ForwardedClaims, a.forwardedClaims)
+func (v *Verifier) forwardClaims(token jwt.Token, provider Provider) map[string]any {
+	paths := mergedForwardedClaims(provider.ForwardedClaims, v.forwardedClaims)
 	if len(paths) == 0 {
 		return nil
 	}
@@ -277,21 +255,21 @@ func setClaim(claims map[string]any, path authkit.ClaimPath, value any) {
 	current[path[len(path)-1]] = value
 }
 
-func (a *Authenticator) keySet(ctx context.Context, provider Provider) (jwk.Set, error) {
-	now := a.clock()
+func (v *Verifier) keySet(ctx context.Context, provider Provider) (jwk.Set, error) {
+	now := v.clock()
 	cacheKey, err := keySetCacheKey(provider)
 	if err != nil {
 		return nil, err
 	}
 
-	a.mu.Lock()
-	if cached, ok := a.keySets[cacheKey]; ok && now.Before(cached.expiresAt) {
-		a.mu.Unlock()
+	v.mu.Lock()
+	if cached, ok := v.keySets[cacheKey]; ok && now.Before(cached.expiresAt) {
+		v.mu.Unlock()
 
 		return cached.set, nil
 	}
-	if req, ok := a.requests[cacheKey]; ok {
-		a.mu.Unlock()
+	if req, ok := v.requests[cacheKey]; ok {
+		v.mu.Unlock()
 
 		select {
 		case <-ctx.Done():
@@ -302,21 +280,21 @@ func (a *Authenticator) keySet(ctx context.Context, provider Provider) (jwk.Set,
 	}
 
 	req := &keySetRequest{done: make(chan struct{})}
-	a.requests[cacheKey] = req
-	a.mu.Unlock()
+	v.requests[cacheKey] = req
+	v.mu.Unlock()
 
-	req.set, req.err = a.fetchKeySet(ctx, provider)
+	req.set, req.err = v.fetchKeySet(ctx, provider)
 
-	a.mu.Lock()
-	delete(a.requests, cacheKey)
-	if req.err == nil && a.keySetCacheTTL > 0 {
-		a.keySets[cacheKey] = cachedKeySet{
+	v.mu.Lock()
+	delete(v.requests, cacheKey)
+	if req.err == nil && v.keySetCacheTTL > 0 {
+		v.keySets[cacheKey] = cachedKeySet{
 			set:       req.set,
-			expiresAt: now.Add(a.keySetCacheTTL),
+			expiresAt: now.Add(v.keySetCacheTTL),
 		}
 	}
 	close(req.done)
-	a.mu.Unlock()
+	v.mu.Unlock()
 
 	return req.set, req.err
 }
@@ -335,13 +313,13 @@ func keySetCacheKey(provider Provider) (string, error) {
 	return provider.JWKSURL + "\x00" + strings.Join(names, ","), nil
 }
 
-func (a *Authenticator) fetchKeySet(ctx context.Context, provider Provider) (jwk.Set, error) {
+func (v *Verifier) fetchKeySet(ctx context.Context, provider Provider) (jwk.Set, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, provider.JWKSURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("oidc: create JWKS request: %w", err)
 	}
 
-	resp, err := a.httpClient.Do(httpReq)
+	resp, err := v.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("oidc: fetch JWKS: %w", err)
 	}

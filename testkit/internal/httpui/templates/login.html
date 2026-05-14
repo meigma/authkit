@@ -1,6 +1,6 @@
 {{define "page"}}
 <section class="page-heading">
-  <h1>API token login</h1>
+  <h1>Sign in</h1>
 </section>
 
 {{if .Error}}
@@ -14,5 +14,14 @@
     <input name="api_token" type="password" required autofocus autocomplete="off">
   </label>
   <button type="submit">Continue</button>
+</form>
+
+<form class="paste-form auth-form" method="post" action="/auth/oidc-token">
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+  <label>
+    OIDC bearer token
+    <textarea name="oidc_token" rows="5" required autocomplete="off"></textarea>
+  </label>
+  <button type="submit">Exchange OIDC token</button>
 </form>
 {{end}}

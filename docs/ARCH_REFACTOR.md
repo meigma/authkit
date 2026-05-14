@@ -17,7 +17,7 @@ They can, however, share the same destination: a verified identity becomes an
 authkit principal relationship and an authkit-owned credential used for normal
 API access.
 
-Today, the core request path is:
+The old external-identity request path was:
 
 ```text
 Authenticator -> Identity -> PrincipalResolver -> Principal -> Authorizer
@@ -38,7 +38,7 @@ external proof -> authkit.Identity -> onboarding/exchange -> authkit credential 
 Normal API requests then use the authkit credential:
 
 ```text
-authkit credential -> PrincipalResolver -> Principal -> Authorizer
+authkit credential -> PrincipalAuthenticator -> Principal -> Authorizer
 ```
 
 ## Why This Matters
@@ -65,8 +65,8 @@ The proposal builds on existing authkit language instead of replacing it:
 - `authkit.ExternalIdentity` remains the durable relationship between a
   provider-scoped identity and a principal.
 - `authkit.Principal` remains the internal actor authorization uses.
-- `authkit.PrincipalResolver` remains the runtime bridge from credential
-  identity to principal.
+- `authkit.PrincipalResolver` remains the exchange/onboarding bridge from
+  verified identity to principal.
 - `authkit.IdentityLinker` remains the low-level operation for attaching an
   external identity to an existing principal.
 - `authkit.IdentityProvisioner` remains the atomic create-and-link operation.
@@ -93,7 +93,7 @@ authkit.Identity -> resolve/provision Principal -> issue authkit credential
 Provider packages still own proof:
 
 ```text
-OIDC bearer token -> oidc.Authenticator -> authkit.Identity
+OIDC bearer token -> oidc.Verifier -> authkit.Identity
 passkey assertion -> passkey service -> authkit.Identity
 future method     -> method package -> authkit.Identity
 ```

@@ -1,2 +1,2 @@
-// Package authflow wires the authkit API-token exchange flow for testkit.
+// Package authflow wires authkit token exchange flows for testkit.
 package authflow

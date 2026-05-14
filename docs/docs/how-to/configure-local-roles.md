@@ -79,9 +79,10 @@ Pass the authorizer to the pipeline or composition helper:
 
 ```go
 kit, err := compose.NewHTTP(compose.HTTPOptions{
-	Authenticators: authenticators,
-	Resolver:       store,
-	Authorizer:     authorizer,
+	PrincipalAuthenticators: []compose.PrincipalAuthenticatorSpec{
+		compose.AccessJWT(accessVerifier, store),
+	},
+	Authorizer: authorizer,
 })
 if err != nil {
 	return err

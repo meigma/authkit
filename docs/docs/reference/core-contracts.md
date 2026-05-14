@@ -5,13 +5,14 @@ description: Reference for authkit root types, request shapes, facts, claim path
 
 # Core Contracts Reference
 
-This page describes the root `authkit` contracts used by authenticators,
-resolvers, authorizers, stores, and HTTP adapters.
+This page describes the root `authkit` contracts used by principal
+authenticators, exchange services, resolvers, authorizers, stores, and HTTP
+adapters.
 
 ## Identity
 
-`authkit.Identity` describes a credential identity after authentication
-succeeds.
+`authkit.Identity` describes an external credential identity after proof
+verification succeeds.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -206,7 +207,7 @@ The fields match `authkit.ProvisioningRule`.
 | Error | Condition |
 |-------|-----------|
 | `authkit.ErrUnauthenticated` | No request credential authenticated successfully. |
-| `authkit.ErrUnresolvedIdentity` | A valid credential has no linked principal. |
+| `authkit.ErrUnresolvedIdentity` | A verified external identity has no linked principal. |
 | `authkit.ErrUnauthorized` | A resolved principal is not allowed to perform an action. |
 | `authkit.ErrInternal` | An auth pipeline failure should be treated as internal. |
 | `authkit.ErrProvisioningRuleNotFound` | A provisioning rule does not exist. |

@@ -54,6 +54,7 @@ func NewServer(pastes *paste.Service, auth *authflow.Runtime) (*Server, error) {
 	mux.HandleFunc("GET /{$}", server.handleIndex)
 	mux.HandleFunc("GET /login", server.handleLogin)
 	mux.HandleFunc("POST /auth/token", server.handleExchangeAPIToken)
+	mux.HandleFunc("POST /auth/oidc-token", server.handleExchangeOIDCToken)
 	mux.HandleFunc("POST /logout", server.handleLogout)
 	mux.Handle("GET /new", server.withAccessCookie(auth.Authenticate(http.HandlerFunc(server.handleNew))))
 	mux.Handle("POST /pastes", server.withAccessCookie(auth.Authenticate(http.HandlerFunc(server.handleCreate))))

@@ -49,3 +49,30 @@ type APITokenResult struct {
 	// AccessToken is the authkit access JWT issued for Principal.
 	AccessToken accessjwt.IssuedToken
 }
+
+// IdentityOptions configures an IdentityExchanger.
+type IdentityOptions struct {
+	// Resolver resolves or provisions verified external identities.
+	Resolver authkit.PrincipalResolver
+
+	// AccessTokens issues authkit access JWTs.
+	AccessTokens AccessTokenIssuer
+}
+
+// IdentityRequest describes an identity exchange request.
+type IdentityRequest struct {
+	// Identity is the verified external identity presented for exchange.
+	Identity authkit.Identity
+}
+
+// IdentityResult describes a completed identity exchange.
+type IdentityResult struct {
+	// Identity is the verified external identity exchanged for an access JWT.
+	Identity authkit.Identity
+
+	// Principal is the principal resolved or provisioned for Identity.
+	Principal authkit.Principal
+
+	// AccessToken is the authkit access JWT issued for Principal.
+	AccessToken accessjwt.IssuedToken
+}

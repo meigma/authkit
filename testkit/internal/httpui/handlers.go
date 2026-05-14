@@ -65,25 +65,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, req *http.Request) {
 }
 
 func (s *Server) handleExchangeAPIToken(w http.ResponseWriter, req *http.Request) {
-	req.Body = http.MaxBytesReader(w, req.Body, loginFormMaxBytes)
-	if err := req.ParseForm(); err != nil {
-		s.renderLogin(w, req, http.StatusBadRequest, "Could not read API token.")
-
-		return
-	}
-	if err := s.csrf.validate(req); err != nil {
-		s.renderLogin(w, req, http.StatusForbidden, "Could not validate form.")
-
-		return
-	}
-
-	rawToken := strings.TrimSpace(req.PostFormValue("api_token"))
-	if rawToken == "" {
-		rawToken = bearerToken(req)
-	}
-	if rawToken == "" {
-		s.renderLogin(w, req, http.StatusUnauthorized, "API token is required.")
-
+	rawToken, ok := s.exchangeTokenInput(
+		w,
+		req,
+		"api_token",
+		"Could not read API token.",
+		"API token is required.",
+	)
+	if !ok {
 		return
 	}
 
@@ -96,6 +85,61 @@ func (s *Server) handleExchangeAPIToken(w http.ResponseWriter, req *http.Request
 
 	authflow.SetAccessCookie(w, result.AccessToken)
 	http.Redirect(w, req, "/new", http.StatusSeeOther)
+}
+
+func (s *Server) handleExchangeOIDCToken(w http.ResponseWriter, req *http.Request) {
+	rawToken, ok := s.exchangeTokenInput(
+		w,
+		req,
+		"oidc_token",
+		"Could not read OIDC token.",
+		"OIDC token is required.",
+	)
+	if !ok {
+		return
+	}
+
+	result, err := s.auth.ExchangeOIDCToken(req.Context(), rawToken)
+	if err != nil {
+		s.renderOIDCExchangeError(w, req, err)
+
+		return
+	}
+
+	authflow.SetAccessCookie(w, result.AccessToken)
+	http.Redirect(w, req, "/new", http.StatusSeeOther)
+}
+
+func (s *Server) exchangeTokenInput(
+	w http.ResponseWriter,
+	req *http.Request,
+	field string,
+	readError string,
+	requiredError string,
+) (string, bool) {
+	req.Body = http.MaxBytesReader(w, req.Body, loginFormMaxBytes)
+	if err := req.ParseForm(); err != nil {
+		s.renderLogin(w, req, http.StatusBadRequest, readError)
+
+		return "", false
+	}
+	if err := s.csrf.validate(req); err != nil {
+		s.renderLogin(w, req, http.StatusForbidden, "Could not validate form.")
+
+		return "", false
+	}
+
+	rawToken := strings.TrimSpace(req.PostFormValue(field))
+	if rawToken == "" {
+		rawToken = bearerToken(req)
+	}
+	if rawToken == "" {
+		s.renderLogin(w, req, http.StatusUnauthorized, requiredError)
+
+		return "", false
+	}
+
+	return rawToken, true
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, req *http.Request) {
@@ -223,6 +267,16 @@ func (s *Server) renderExchangeError(w http.ResponseWriter, req *http.Request, e
 	s.renderError(w, http.StatusInternalServerError, "Could not exchange API token.")
 }
 
+func (s *Server) renderOIDCExchangeError(w http.ResponseWriter, req *http.Request, err error) {
+	if errors.Is(err, authkit.ErrUnauthenticated) || errors.Is(err, authkit.ErrUnresolvedIdentity) {
+		s.renderLogin(w, req, http.StatusUnauthorized, "OIDC token is invalid.")
+
+		return
+	}
+
+	s.renderError(w, http.StatusInternalServerError, "Could not exchange OIDC token.")
+}
+
 func (s *Server) renderReadError(w http.ResponseWriter, err error) {
 	if errors.Is(err, paste.ErrPasteNotFound) {
 		s.renderError(w, http.StatusNotFound, "Paste not found.")
@@ -264,7 +318,7 @@ func (s *Server) renderLogin(w http.ResponseWriter, req *http.Request, status in
 	}
 
 	s.render(w, status, pageLogin, pageData{
-		Title:     "API token login",
+		Title:     "Sign in",
 		CSRFToken: token,
 		Error:     message,
 	})

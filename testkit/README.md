@@ -2,7 +2,10 @@
 
 `testkit` is a small pastebin-style web app used to exercise authkit in realistic application code.
 
-The current slice uses authkit's API-token exchange path for paste creation. Reading pastes remains public; creating pastes requires exchanging the startup API token for a short-lived authkit access JWT carried in a temporary app cookie.
+The current slice uses authkit exchange paths for paste creation. Reading pastes
+remains public; creating pastes requires exchanging the startup API token or a
+trusted OIDC JWT for a short-lived authkit access JWT carried in a temporary app
+cookie.
 
 ## Run
 
@@ -22,7 +25,12 @@ Startup prints a fresh development API token:
 testkit seed API token: ak_...
 ```
 
-Use that token on `/login`. The token is shown only at startup and expires after 24 hours.
+Use that token on `/login`. The token is shown only at startup and expires after
+24 hours.
+
+The OIDC exchange form is present for validation, but the standalone CLI does
+not seed trusted OIDC providers. Tests configure provider trust directly around
+the same authflow runtime.
 
 ## Persistence
 
@@ -42,8 +50,9 @@ Without `TESTKIT_DATABASE_URL`, both paste data and authkit state are in memory.
 ## Routes
 
 - `GET /` lists recent pastes.
-- `GET /login` renders the API-token login form.
+- `GET /login` renders API-token and OIDC-token exchange forms.
 - `POST /auth/token` exchanges an API token and sets the temporary access cookie.
+- `POST /auth/oidc-token` exchanges a trusted OIDC JWT and sets the temporary access cookie.
 - `POST /logout` clears the temporary access cookie.
 - `GET /new` renders the create form for authenticated browsers.
 - `POST /pastes` creates a paste for authenticated browsers and redirects to its page.
@@ -52,4 +61,6 @@ Without `TESTKIT_DATABASE_URL`, both paste data and authkit state are in memory.
 
 ## Current Scope
 
-The browser cookie is a temporary testkit transport for authkit access JWTs. Ownership, edit/delete flows, refresh tokens, OIDC login, richer session management, and API endpoints are intentionally deferred until this API-token path is proven in the app.
+The browser cookie is a temporary testkit transport for authkit access JWTs.
+Ownership, edit/delete flows, refresh tokens, hosted OIDC login, richer session
+management, and API endpoints are intentionally deferred.

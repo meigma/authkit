@@ -2,6 +2,9 @@ package httpui
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +16,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/lestrrat-go/jwx/v3/jwa"
+	"github.com/lestrrat-go/jwx/v3/jwk"
+	"github.com/lestrrat-go/jwx/v3/jwt"
+
+	"github.com/meigma/authkit"
+	"github.com/meigma/authkit/oidc"
 	authmemory "github.com/meigma/authkit/store/memory"
 	"github.com/meigma/authkit/testkit/internal/authflow"
 	"github.com/meigma/authkit/testkit/internal/paste"
@@ -40,7 +49,7 @@ func TestServerRendersPublicPages(t *testing.T) {
 			name:       "login form",
 			path:       "/login",
 			wantStatus: http.StatusOK,
-			wantBody:   "API token login",
+			wantBody:   "Sign in",
 		},
 	}
 
@@ -105,6 +114,69 @@ func TestServerRequiresAuthenticationForPasteCreation(t *testing.T) {
 	}
 }
 
+func TestServerRejectsDirectOIDCTokensForPasteRoutes(t *testing.T) {
+	server, token := newOIDCTestServer(t, testPasteID)
+	csrfCookie := csrfFromLogin(t, server)
+
+	tests := []struct {
+		name string
+		req  *http.Request
+	}{
+		{
+			name: "new paste bearer",
+			req: newAuthorizedRequest(
+				httptest.NewRequest(http.MethodGet, "/new", nil),
+				bearer(token),
+			),
+		},
+		{
+			name: "new paste cookie",
+			req: newCookieRequest(
+				httptest.NewRequest(http.MethodGet, "/new", nil),
+				&http.Cookie{Name: authflow.CookieName, Value: token},
+			),
+		},
+		{
+			name: "create paste bearer",
+			req: func() *http.Request {
+				req := newAuthorizedRequest(
+					newPostFormRequest(t, "/pastes", url.Values{
+						"body":        {"hello"},
+						csrfFieldName: {csrfCookie.Value},
+					}),
+					bearer(token),
+				)
+				req.AddCookie(csrfCookie)
+
+				return req
+			}(),
+		},
+		{
+			name: "create paste cookie",
+			req: func() *http.Request {
+				req := newPostFormRequest(t, "/pastes", url.Values{
+					"body":        {"hello"},
+					csrfFieldName: {csrfCookie.Value},
+				})
+				req.AddCookie(csrfCookie)
+				req.AddCookie(&http.Cookie{Name: authflow.CookieName, Value: token})
+
+				return req
+			}(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			server.ServeHTTP(recorder, tt.req)
+
+			assert.Equal(t, http.StatusSeeOther, recorder.Code)
+			assert.Equal(t, authflow.LoginPath, recorder.Header().Get("Location"))
+		})
+	}
+}
+
 func TestServerExchangesAPITokenAndCreatesPaste(t *testing.T) {
 	server := newTestServer(t, testPasteID)
 	browser := exchangeAccessCookie(t, server)
@@ -154,6 +226,44 @@ func TestServerExchangesAPITokenAndCreatesPaste(t *testing.T) {
 	assert.Equal(t, http.StatusOK, indexRecorder.Code)
 	assert.Contains(t, indexRecorder.Body.String(), "Example title")
 	assert.Contains(t, indexRecorder.Body.String(), "/p/"+testPasteID)
+}
+
+func TestServerExchangesOIDCTokenAndCreatesPaste(t *testing.T) {
+	server, token := newOIDCTestServer(t, testPasteID)
+	csrfCookie := csrfFromLogin(t, server)
+	req := newPostFormRequest(t, "/auth/oidc-token", url.Values{
+		"oidc_token":  {token},
+		csrfFieldName: {csrfCookie.Value},
+	})
+	req.AddCookie(csrfCookie)
+	exchangeRecorder := httptest.NewRecorder()
+	server.ServeHTTP(exchangeRecorder, req)
+
+	require.Equal(t, http.StatusSeeOther, exchangeRecorder.Code)
+	assert.Equal(t, "/new", exchangeRecorder.Header().Get("Location"))
+	accessCookie := findCookie(t, exchangeRecorder, authflow.CookieName)
+	assert.NotEmpty(t, accessCookie.Value)
+
+	createRecorder := httptest.NewRecorder()
+	createReq := newPostFormRequest(t, "/pastes", url.Values{
+		"title":       {"OIDC paste"},
+		"body":        {"created with OIDC exchange"},
+		"syntax":      {"text"},
+		csrfFieldName: {csrfCookie.Value},
+	})
+	createReq.AddCookie(accessCookie)
+	createReq.AddCookie(csrfCookie)
+	server.ServeHTTP(createRecorder, createReq)
+
+	require.Equal(t, http.StatusSeeOther, createRecorder.Code)
+	assert.Equal(t, "/p/"+testPasteID, createRecorder.Header().Get("Location"))
+
+	pasteRecorder := httptest.NewRecorder()
+	server.ServeHTTP(pasteRecorder, httptest.NewRequest(http.MethodGet, "/p/"+testPasteID, nil))
+
+	assert.Equal(t, http.StatusOK, pasteRecorder.Code)
+	assert.Contains(t, pasteRecorder.Body.String(), "OIDC paste")
+	assert.Contains(t, pasteRecorder.Body.String(), "created with OIDC exchange")
 }
 
 func TestServerRejectsInvalidAPITokenExchange(t *testing.T) {
@@ -248,6 +358,12 @@ func TestServerRejectsMissingCSRFToken(t *testing.T) {
 			}),
 		},
 		{
+			name: "OIDC-token exchange",
+			req: newPostFormRequest(t, "/auth/oidc-token", url.Values{
+				"oidc_token": {"not-a-token"},
+			}),
+		},
+		{
 			name: "paste create",
 			req: func() *http.Request {
 				req := newPostFormRequest(t, "/pastes", url.Values{
@@ -280,6 +396,17 @@ type testServer struct {
 func newTestServer(t *testing.T, ids ...string) *testServer {
 	t.Helper()
 
+	return newTestServerWithAuth(t, ids, nil)
+}
+
+func newTestServerWithAuth(
+	t *testing.T,
+	ids []string,
+	setupAuthStore func(*testing.T, *authmemory.Store),
+	authOptions ...authflow.Option,
+) *testServer {
+	t.Helper()
+
 	sequence := sequentialIDs(ids...)
 	service, err := paste.NewService(
 		testkitmemory.NewStore(),
@@ -288,10 +415,18 @@ func newTestServer(t *testing.T, ids ...string) *testServer {
 	)
 	require.NoError(t, err)
 
+	authStore := authmemory.NewStore()
+	if setupAuthStore != nil {
+		setupAuthStore(t, authStore)
+	}
+	runtimeOptions := []authflow.Option{
+		authflow.WithClock(fixedTime),
+	}
+	runtimeOptions = append(runtimeOptions, authOptions...)
 	authRuntime, err := authflow.NewRuntime(
 		context.Background(),
-		authmemory.NewStore(),
-		authflow.WithClock(fixedTime),
+		authStore,
+		runtimeOptions...,
 	)
 	require.NoError(t, err)
 	server, err := NewServer(service, authRuntime)
@@ -301,6 +436,36 @@ func newTestServer(t *testing.T, ids ...string) *testServer {
 		Server: server,
 		auth:   authRuntime,
 	}
+}
+
+func newOIDCTestServer(t *testing.T, ids ...string) (*testServer, string) {
+	t.Helper()
+
+	issuer := newTestIssuer(t)
+	provider := issuer.provider()
+	provider.ForwardedClaims = []authkit.ClaimPath{{"email"}, {"name"}}
+	server := newTestServerWithAuth(
+		t,
+		ids,
+		func(t *testing.T, store *authmemory.Store) {
+			t.Helper()
+
+			_, err := store.TrustProvider(context.Background(), provider)
+			require.NoError(t, err)
+		},
+		authflow.WithOIDCOptions(oidc.WithHTTPClient(issuer.server.Client())),
+	)
+	token := issuer.sign(t, oidcTokenRequest{
+		subject:   "user-123",
+		audiences: []string{testAudience},
+		expiresAt: fixedTime().Add(time.Hour),
+		claims: map[string]any{
+			"email": "ada@example.test",
+			"name":  "Ada Lovelace",
+		},
+	})
+
+	return server, token
 }
 
 type browserCookies struct {
@@ -403,4 +568,84 @@ func (s *idSequence) next() (string, error) {
 
 func fixedTime() time.Time {
 	return time.Date(2026, time.May, 14, 10, 0, 0, 0, time.UTC)
+}
+
+const testAudience = "testkit"
+
+type testIssuer struct {
+	server     *httptest.Server
+	issuer     string
+	jwksURL    string
+	signingKey jwk.Key
+	publicSet  jwk.Set
+}
+
+type oidcTokenRequest struct {
+	subject   string
+	audiences []string
+	expiresAt time.Time
+	claims    map[string]any
+}
+
+func newTestIssuer(t *testing.T) *testIssuer {
+	t.Helper()
+
+	rawKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	signingKey, err := jwk.Import(rawKey)
+	require.NoError(t, err)
+	require.NoError(t, signingKey.Set(jwk.KeyIDKey, "test-key"))
+	require.NoError(t, signingKey.Set(jwk.AlgorithmKey, jwa.RS256()))
+
+	privateSet := jwk.NewSet()
+	require.NoError(t, privateSet.AddKey(signingKey))
+	publicSet, err := jwk.PublicSetOf(privateSet)
+	require.NoError(t, err)
+
+	issuer := &testIssuer{
+		signingKey: signingKey,
+		publicSet:  publicSet,
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(contentTypeHeader, "application/json")
+		if err := json.NewEncoder(w).Encode(issuer.publicSet); err != nil {
+			t.Errorf("encode JWKS: %v", err)
+		}
+	})
+	issuer.server = httptest.NewTLSServer(mux)
+	t.Cleanup(issuer.server.Close)
+	issuer.issuer = issuer.server.URL
+	issuer.jwksURL = issuer.server.URL + "/jwks"
+
+	return issuer
+}
+
+func (i *testIssuer) provider() oidc.Provider {
+	return oidc.Provider{
+		Issuer:    i.issuer,
+		Audiences: []string{testAudience},
+		JWKSURL:   i.jwksURL,
+	}
+}
+
+func (i *testIssuer) sign(t *testing.T, req oidcTokenRequest) string {
+	t.Helper()
+
+	builder := jwt.NewBuilder().
+		Issuer(i.issuer).
+		Subject(req.subject).
+		Audience(req.audiences).
+		IssuedAt(fixedTime().Add(-time.Minute)).
+		Expiration(req.expiresAt)
+	for name, value := range req.claims {
+		builder.Claim(name, value)
+	}
+
+	token, err := builder.Build()
+	require.NoError(t, err)
+	signed, err := jwt.Sign(token, jwt.WithKey(jwa.RS256(), i.signingKey))
+	require.NoError(t, err)
+
+	return string(signed)
 }

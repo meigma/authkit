@@ -1,7 +1,7 @@
 # authkit
 
 authkit is a Go library for authentication and authorization in Web API services.
-It provides reusable request authentication, principal resolution, and authorization plumbing without becoming an identity provider, hosted login system, or policy framework.
+It provides reusable request authentication, token exchange, principal resolution, and authorization plumbing without becoming an identity provider, hosted login system, or policy framework.
 
 The shared auth path works end to end: a short-lived authkit access JWT authenticates to an internal principal, and an authorizer checks that principal against an action, application resource, and optional caller-supplied facts.
 
@@ -16,35 +16,31 @@ go get github.com/meigma/authkit
 Run the vertical example:
 
 ```sh
-go run ./examples/notes
+go run ./testkit/cmd/testkit
 ```
 
-The example prints a seed API token and starts `http://localhost:8080`.
+The testkit pastebin prints a seed API token and starts `http://localhost:8080`.
 
-Exchange the seed API token for an authkit access JWT:
+Open `/login`, paste the seed token, and create a paste. The login form
+exchanges the API token for an authkit access JWT carried in the temporary
+`authkit_testkit_access` cookie.
 
-```sh
-ACCESS_TOKEN=$(curl -s -X POST \
-  -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/auth/token | jq -r .access_token)
-```
+The same exchange path is available to tests and applications through Go APIs:
 
-Use the access JWT to call the allowed route:
-
-```sh
-curl -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/notes/allowed
-```
-
-The same access JWT is authenticated but denied by policy for another note:
-
-```sh
-curl -i -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/notes/denied
+```go
+result, err := apiTokenExchanger.Exchange(ctx, exchange.APITokenRequest{
+	Plaintext: seedToken,
+})
+if err != nil {
+	return err
+}
+_ = result.AccessToken.Plaintext
 ```
 
 The example is also covered by tests:
 
 ```sh
-go test ./examples/notes
+go test ./testkit/...
 ```
 
 ## Using Authkit
@@ -61,7 +57,7 @@ Applications that need full control can use
 [explicit composition](https://authkit.meigma.dev/how-to/use-explicit-composition).
 Common setup tasks are covered by focused guides for
 [local roles](https://authkit.meigma.dev/how-to/configure-local-roles),
-[OIDC auto-provisioning](https://authkit.meigma.dev/how-to/auto-provision-oidc-principals),
+[OIDC exchange and auto-provisioning](https://authkit.meigma.dev/how-to/auto-provision-oidc-principals),
 and [authorization facts](https://authkit.meigma.dev/how-to/supply-authorization-facts).
 
 The [architecture](https://authkit.meigma.dev/explanations/architecture) and
@@ -71,7 +67,7 @@ pipeline, credential independence, failure mapping, and security invariants.
 ## Documentation
 
 - Docs home: [authkit.meigma.dev](https://authkit.meigma.dev/)
-- Tutorial: [Learn authkit with the notes service](https://authkit.meigma.dev/tutorials/notes-service)
+- Tutorial: [Learn authkit with the testkit pastebin](https://authkit.meigma.dev/tutorials/testkit-pastebin)
 - How-to: [Compose HTTP authentication](https://authkit.meigma.dev/how-to/compose-http-auth)
 - Explanation: [Architecture](https://authkit.meigma.dev/explanations/architecture)
 - Reference: [Core contracts](https://authkit.meigma.dev/reference/core-contracts) and

@@ -20,7 +20,7 @@ type options struct {
 	keySetCacheTTL  time.Duration
 }
 
-// Option configures an Authenticator.
+// Option configures a Verifier.
 type Option func(*options)
 
 func defaultOptions() options {
