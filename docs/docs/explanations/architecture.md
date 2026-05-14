@@ -6,21 +6,28 @@ description: Understand the authkit authentication and authorization architectur
 # Architecture
 
 authkit separates credentials, application principals, and authorization policy.
-That separation lets API tokens and OIDC-issued JWTs authenticate through
-different mechanisms while resolving to the same internal principal.
+That separation lets API tokens act as exchange credentials while protected
+resource routes authenticate short-lived authkit access JWTs.
 
 ## Core Pipeline
 
-The core request path is:
+The JWT-first protected-resource path is:
+
+```text
+PrincipalAuthenticator -> Principal -> Authorizer
+```
+
+An `authkit.PrincipalAuthenticator` verifies an authkit-issued request
+credential and returns an internal `Principal`. An `Authorizer` decides whether
+an authorization check containing the principal, action, resource, and
+caller-supplied facts is allowed.
+
+The older identity path still exists for external credentials that have not yet
+been moved behind exchange flows:
 
 ```text
 Authenticator -> Identity -> PrincipalResolver -> Principal -> Authorizer
 ```
-
-An `Authenticator` verifies a credential on an HTTP request and returns an
-external `Identity`. A `PrincipalResolver` maps that external identity to an
-internal `Principal`. An `Authorizer` decides whether an authorization check
-containing the principal, action, resource, and caller-supplied facts is allowed.
 
 The invariant is credential independence: permissions attach to the internal
 principal, not to a token, JWT, email address, or provider-specific user record.
@@ -78,6 +85,9 @@ code.
 Adapters sit at the edges:
 
 - `apikey` issues and verifies opaque API tokens.
+- `exchange` converts verified credentials into access JWTs.
+- `accessjwt` issues and verifies authkit-owned access JWTs.
+- `accessjwtauth` adapts access JWTs to HTTP bearer authentication.
 - `oidc` verifies signed JWT bearer tokens from trusted issuers.
 - `onboarding` coordinates explicit identity attachment and principal provisioning.
 - `provisioning` can create principals for caller-approved unresolved identities.
@@ -94,14 +104,9 @@ Identity linking is explicit. Applications create principals, trust providers,
 and link external identities to principals through setup code, migrations, CLIs,
 or admin handlers they own.
 
-For API tokens, the external identity is keyed as:
-
-```text
-provider = "api-token"
-subject  = token ID
-```
-
-For OIDC, the external identity is keyed as:
+API tokens do not create identity links. They store `principal_id` directly and
+are exchanged for authkit access JWTs. OIDC still uses identity links until it
+is moved behind an exchange flow. For OIDC, the external identity is keyed as:
 
 ```text
 provider = issuer URL

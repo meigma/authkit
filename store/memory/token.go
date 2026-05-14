@@ -23,6 +23,9 @@ func (s *Store) CreateToken(ctx context.Context, token apikey.StoredToken) error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if _, ok := s.principals[token.PrincipalID]; !ok {
+		return authkit.ErrPrincipalNotFound
+	}
 	if _, ok := s.tokens[token.ID]; ok {
 		return errors.New("memory: token already exists")
 	}

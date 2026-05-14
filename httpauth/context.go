@@ -25,6 +25,12 @@ func IdentityFromContext(ctx context.Context) (authkit.Identity, bool) {
 	if !ok {
 		return authkit.Identity{}, false
 	}
+	if authentication.Identity.Provider == "" &&
+		authentication.Identity.Subject == "" &&
+		authentication.Identity.CredentialID == "" &&
+		len(authentication.Identity.Claims) == 0 {
+		return authkit.Identity{}, false
+	}
 
 	return authentication.Identity, true
 }

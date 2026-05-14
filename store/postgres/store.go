@@ -800,7 +800,11 @@ func (s *Store) CreateToken(ctx context.Context, token apikey.StoredToken) error
 		token.RevokedAt,
 	); err != nil {
 		if isPostgresCode(err, foreignKeyViolation) {
-			return fmt.Errorf("postgres: principal %q does not exist", token.PrincipalID)
+			return fmt.Errorf(
+				"%w: postgres: principal %q does not exist",
+				authkit.ErrPrincipalNotFound,
+				token.PrincipalID,
+			)
 		}
 
 		return fmt.Errorf("postgres: create token: %w", err)

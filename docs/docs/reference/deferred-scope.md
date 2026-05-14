@@ -14,8 +14,9 @@ that integration before committing to a compatibility promise.
 authkit currently supports:
 
 - core identity, principal, resource, decision, authorization fact, and port contracts
-- explicit `Identity -> Principal -> Authorizer` request pipeline
+- JWT-first `Principal -> Authorizer` request pipeline plus temporary identity-based OIDC support
 - opaque API-token issuing, verification, revocation, expiration, and last-used tracking
+- API-token-to-access-JWT exchange primitives
 - memory and Postgres storage for principals, local roles, provisioning rules, identity links, API tokens, and OIDC provider trust
 - Go-level management service for setup flows
 - OIDC-issued JWT bearer-token authentication

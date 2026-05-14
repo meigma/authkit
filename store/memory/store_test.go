@@ -379,12 +379,13 @@ func createPrincipal(t *testing.T, store *Store) authkit.Principal {
 
 func TestStoreTokenStorage(t *testing.T) {
 	store := NewStore()
+	principal := createPrincipal(t, store)
 	now := fixedStoreTime()
 	usedAt := now.Add(time.Hour)
 	wantUsedAt := usedAt
 	token := apikey.StoredToken{
 		ID:          "token_1",
-		PrincipalID: testProvider,
+		PrincipalID: principal.ID,
 		Name:        "deploy",
 		SecretHash:  sha256.Sum256([]byte("secret")),
 		ExpiresAt:   now.Add(time.Hour),
@@ -436,10 +437,13 @@ func TestStoreTokenLastUsedAndRevocation(t *testing.T) {
 func TestStoreTokenMissingBehavior(t *testing.T) {
 	store := NewStore()
 	now := fixedStoreTime()
+	token := tokenFixture(now)
+	token.PrincipalID = "missing"
 
 	found, err := store.FindToken(context.Background(), "missing")
 	require.ErrorIs(t, err, apikey.ErrTokenNotFound)
 	assert.Empty(t, found)
+	require.ErrorIs(t, store.CreateToken(context.Background(), token), authkit.ErrPrincipalNotFound)
 
 	require.ErrorIs(
 		t,
@@ -465,7 +469,9 @@ func TestStoreTokenContextCancellation(t *testing.T) {
 func createToken(t *testing.T, store *Store, now time.Time) apikey.StoredToken {
 	t.Helper()
 
+	principal := createPrincipal(t, store)
 	token := tokenFixture(now)
+	token.PrincipalID = principal.ID
 	require.NoError(t, store.CreateToken(context.Background(), token))
 
 	return token

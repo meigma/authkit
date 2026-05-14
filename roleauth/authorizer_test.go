@@ -6,14 +6,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/meigma/authkit"
-	"github.com/meigma/authkit/apikey"
+	"github.com/meigma/authkit/accessjwt"
+	"github.com/meigma/authkit/accessjwtauth"
 	"github.com/meigma/authkit/httpauth"
+	"github.com/meigma/authkit/internal/authtest"
 	"github.com/meigma/authkit/roleauth"
 	"github.com/meigma/authkit/store/memory"
 )
@@ -120,47 +121,39 @@ func TestAuthorizerRespectsContextCancellation(t *testing.T) {
 	assert.Empty(t, decision)
 }
 
-func TestAuthorizerAllowsHTTPMiddlewareThroughRoleAction(t *testing.T) {
-	now := time.Date(2026, time.May, 9, 9, 0, 0, 0, time.UTC)
+func TestAuthorizerAllowsHTTPMiddlewareThroughAccessJWT(t *testing.T) {
+	ctx := context.Background()
 	store := memory.NewStore()
-	principal, err := store.CreatePrincipal(context.Background(), authkit.CreatePrincipalRequest{
+	principal, err := store.CreatePrincipal(ctx, authkit.CreatePrincipalRequest{
 		Kind:        authkit.PrincipalKindUser,
 		DisplayName: "Ada Lovelace",
 	})
 	require.NoError(t, err)
-	_, err = store.CreateRole(context.Background(), authkit.CreateRoleRequest{
+	_, err = store.CreateRole(ctx, authkit.CreateRoleRequest{
 		ID:          testRoleID,
 		DisplayName: "Notes reader",
 	})
 	require.NoError(t, err)
-	require.NoError(t, store.GrantRoleAction(context.Background(), authkit.GrantRoleActionRequest{
+	require.NoError(t, store.GrantRoleAction(ctx, authkit.GrantRoleActionRequest{
 		RoleID: testRoleID,
 		Action: testAction,
 	}))
-	require.NoError(t, store.AssignPrincipalRole(context.Background(), authkit.AssignPrincipalRoleRequest{
+	require.NoError(t, store.AssignPrincipalRole(ctx, authkit.AssignPrincipalRoleRequest{
 		PrincipalID: principal.ID,
 		RoleID:      testRoleID,
 	}))
-
-	tokenService, err := apikey.NewService(store, apikey.WithClock(func() time.Time {
-		return now
-	}))
-	require.NoError(t, err)
-	issued, err := tokenService.IssueToken(context.Background(), apikey.IssueRequest{
+	issuer, verifier := authtest.NewAccessJWTIssuerAndVerifier(t)
+	issued, err := issuer.IssueToken(ctx, accessjwt.IssueRequest{
 		PrincipalID: principal.ID,
-		ExpiresAt:   now.Add(time.Hour),
 	})
 	require.NoError(t, err)
-	_, err = store.LinkIdentity(context.Background(), issued.IdentityLink)
-	require.NoError(t, err)
-	authenticator, err := apikey.NewAuthenticator(tokenService)
+	authenticator, err := accessjwtauth.NewAuthenticator(verifier, store)
 	require.NoError(t, err)
 	authorizer, err := roleauth.NewAuthorizer(store)
 	require.NoError(t, err)
 	pipeline, err := authkit.NewPipeline(authkit.PipelineOptions{
-		Authenticators: []authkit.Authenticator{authenticator},
-		Resolver:       store,
-		Authorizer:     authorizer,
+		PrincipalAuthenticators: []authkit.PrincipalAuthenticator{authenticator},
+		Authorizer:              authorizer,
 	})
 	require.NoError(t, err)
 	middleware, err := httpauth.NewMiddleware(pipeline)

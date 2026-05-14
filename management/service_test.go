@@ -155,7 +155,7 @@ func TestServiceCoreMethodsRequirePorts(t *testing.T) {
 	}
 }
 
-func TestServiceIssueAPITokenRequiresIdentityLinkerBeforeIssuing(t *testing.T) {
+func TestServiceIssueAPITokenRequiresPrincipalFinderBeforeIssuing(t *testing.T) {
 	apiTokens := newFakeAPITokens()
 	service := management.NewService(management.Options{
 		APITokens: apiTokens,
@@ -166,7 +166,7 @@ func TestServiceIssueAPITokenRequiresIdentityLinkerBeforeIssuing(t *testing.T) {
 		ExpiresAt:   fixedTime().Add(time.Hour),
 	})
 
-	require.EqualError(t, err, "management: identity linker is required")
+	require.EqualError(t, err, "management: principal finder is required")
 	assert.Empty(t, issued)
 	assert.Empty(t, apiTokens.issueRequests)
 }
@@ -646,7 +646,7 @@ func TestServiceLinkIdentity(t *testing.T) {
 	assert.Equal(t, []authkit.LinkIdentityRequest{req}, linker.requests)
 }
 
-func TestServiceIssueAPITokenLinksIdentity(t *testing.T) {
+func TestServiceIssueAPITokenIssuesForExistingPrincipal(t *testing.T) {
 	now := fixedTime()
 	expiresAt := now.Add(time.Hour)
 	apiTokens := newFakeAPITokens()
@@ -654,15 +654,14 @@ func TestServiceIssueAPITokenLinksIdentity(t *testing.T) {
 		ID:        testTokenID,
 		Plaintext: testTokenSecret,
 		ExpiresAt: expiresAt,
-		IdentityLink: authkit.LinkIdentityRequest{
-			Provider:    apikey.Provider,
-			Subject:     testTokenID,
-			PrincipalID: testPrincipalID,
-		},
 	}
-	linker := newFakeIdentityLinker()
-	linker.identity = authkit.ExternalIdentity(apiTokens.issued.IdentityLink)
-	service := newService(t, newFakePrincipalCreator(), linker, apiTokens)
+	principals := newFakePrincipalCreator()
+	principals.principal = authkit.Principal{
+		ID:          testPrincipalID,
+		Kind:        authkit.PrincipalKindService,
+		DisplayName: testPrincipalName,
+	}
+	service := newService(t, principals, newFakeIdentityLinker(), apiTokens)
 	req := management.IssueAPITokenRequest{
 		PrincipalID: testPrincipalID,
 		Name:        testTokenName,
@@ -672,26 +671,45 @@ func TestServiceIssueAPITokenLinksIdentity(t *testing.T) {
 	issued, err := service.IssueAPIToken(context.Background(), req)
 
 	require.NoError(t, err)
+	assert.Equal(t, []string{testPrincipalID}, principals.findIDs)
 	assert.Equal(t, []apikey.IssueRequest{{
 		PrincipalID: testPrincipalID,
 		Name:        testTokenName,
 		ExpiresAt:   expiresAt,
 	}}, apiTokens.issueRequests)
-	assert.Equal(t, []authkit.LinkIdentityRequest{apiTokens.issued.IdentityLink}, linker.requests)
 	assert.Equal(t, management.IssuedAPIToken{
-		ID:        testTokenID,
-		Plaintext: testTokenSecret,
-		ExpiresAt: expiresAt,
-		Identity:  linker.identity,
+		ID:          testTokenID,
+		PrincipalID: testPrincipalID,
+		Plaintext:   testTokenSecret,
+		ExpiresAt:   expiresAt,
 	}, issued)
 }
 
-func TestServiceIssueAPITokenReturnsIssueErrorWithoutLinking(t *testing.T) {
+func TestServiceIssueAPITokenRejectsMissingPrincipal(t *testing.T) {
+	principals := newFakePrincipalCreator()
+	principals.err = authkit.ErrPrincipalNotFound
+	apiTokens := newFakeAPITokens()
+	service := newService(t, principals, newFakeIdentityLinker(), apiTokens)
+
+	issued, err := service.IssueAPIToken(context.Background(), management.IssueAPITokenRequest{
+		PrincipalID: testPrincipalID,
+		ExpiresAt:   fixedTime().Add(time.Hour),
+	})
+
+	require.ErrorIs(t, err, authkit.ErrPrincipalNotFound)
+	assert.Empty(t, issued)
+	assert.Equal(t, []string{testPrincipalID}, principals.findIDs)
+	assert.Empty(t, apiTokens.issueRequests)
+}
+
+func TestServiceIssueAPITokenReturnsIssueErrorWithoutLinkingIdentity(t *testing.T) {
 	issueErr := errors.New("issue failed")
 	apiTokens := newFakeAPITokens()
 	apiTokens.issueErr = issueErr
 	linker := newFakeIdentityLinker()
-	service := newService(t, newFakePrincipalCreator(), linker, apiTokens)
+	principals := newFakePrincipalCreator()
+	principals.principal = authkit.Principal{ID: testPrincipalID}
+	service := newService(t, principals, linker, apiTokens)
 
 	issued, err := service.IssueAPIToken(context.Background(), management.IssueAPITokenRequest{
 		PrincipalID: testPrincipalID,
@@ -702,34 +720,6 @@ func TestServiceIssueAPITokenReturnsIssueErrorWithoutLinking(t *testing.T) {
 	assert.Empty(t, issued)
 	assert.Empty(t, linker.requests)
 	assert.Empty(t, apiTokens.revokedIDs)
-}
-
-func TestServiceIssueAPITokenRevokesWhenLinkingFails(t *testing.T) {
-	linkErr := errors.New("link failed")
-	apiTokens := newFakeAPITokens()
-	apiTokens.issued = apikey.IssuedToken{
-		ID:        testTokenID,
-		Plaintext: testTokenSecret,
-		ExpiresAt: fixedTime().Add(time.Hour),
-		IdentityLink: authkit.LinkIdentityRequest{
-			Provider:    apikey.Provider,
-			Subject:     testTokenID,
-			PrincipalID: testPrincipalID,
-		},
-	}
-	apiTokens.revokeErr = errors.New("cleanup failed")
-	linker := newFakeIdentityLinker()
-	linker.err = linkErr
-	service := newService(t, newFakePrincipalCreator(), linker, apiTokens)
-
-	issued, err := service.IssueAPIToken(context.Background(), management.IssueAPITokenRequest{
-		PrincipalID: testPrincipalID,
-		ExpiresAt:   fixedTime().Add(time.Hour),
-	})
-
-	require.ErrorIs(t, err, linkErr)
-	assert.Empty(t, issued)
-	assert.Equal(t, []string{testTokenID}, apiTokens.revokedIDs)
 }
 
 func TestServiceRevokeAPIToken(t *testing.T) {
@@ -825,7 +815,11 @@ func TestServicePropagatesContextCancellation(t *testing.T) {
 		{
 			name: "link identity",
 			run: func() error {
-				_, runErr := service.LinkIdentity(ctx, token.IdentityLink)
+				_, runErr := service.LinkIdentity(ctx, authkit.LinkIdentityRequest{
+					Provider:    testProvider,
+					Subject:     testSubject,
+					PrincipalID: principal.ID,
+				})
 
 				return runErr
 			},
@@ -967,34 +961,30 @@ func TestServiceIssueAPITokenResolvesThroughMemoryStore(t *testing.T) {
 		ExpiresAt:   now.Add(time.Hour),
 	})
 	require.NoError(t, err)
-	identity, err := tokenService.VerifyToken(context.Background(), issued.Plaintext)
+	verified, err := tokenService.VerifyAPIToken(context.Background(), issued.Plaintext)
 	require.NoError(t, err)
-	require.NotNil(t, identity)
-	resolved, err := store.ResolveIdentity(context.Background(), *identity)
-	require.NoError(t, err)
-	require.NotNil(t, resolved)
-	assert.Equal(t, principal, *resolved)
-	assert.Equal(t, authkit.ExternalIdentity{
-		Provider:    apikey.Provider,
-		Subject:     issued.ID,
+	assert.Equal(t, principal.ID, issued.PrincipalID)
+	assert.Equal(t, apikey.VerifiedToken{
+		ID:          issued.ID,
 		PrincipalID: principal.ID,
-	}, issued.Identity)
+		ExpiresAt:   issued.ExpiresAt,
+	}, verified)
 }
 
 func newService(
 	t *testing.T,
-	creator authkit.PrincipalCreator,
+	principals principalStore,
 	linker authkit.IdentityLinker,
 	apiTokens management.APITokens,
 ) *management.Service {
 	t.Helper()
 
-	return newServiceWithRoles(t, creator, newFakeRoleStore(), linker, apiTokens)
+	return newServiceWithRoles(t, principals, newFakeRoleStore(), linker, apiTokens)
 }
 
 func newServiceWithRoles(
 	t *testing.T,
-	creator authkit.PrincipalCreator,
+	principals principalStore,
 	roles roleStore,
 	linker authkit.IdentityLinker,
 	apiTokens management.APITokens,
@@ -1002,7 +992,8 @@ func newServiceWithRoles(
 	t.Helper()
 
 	service := management.NewService(management.Options{
-		PrincipalCreator:              creator,
+		PrincipalCreator:              principals,
+		PrincipalFinder:               principals,
 		RoleCreator:                   roles,
 		RoleActionGranter:             roles,
 		PrincipalRoleAssigner:         roles,
@@ -1017,7 +1008,7 @@ func newServiceWithRoles(
 
 func newServiceWithProvisioningRules(
 	t *testing.T,
-	creator authkit.PrincipalCreator,
+	principals principalStore,
 	roles roleStore,
 	rules provisioningRuleStore,
 	linker authkit.IdentityLinker,
@@ -1026,7 +1017,8 @@ func newServiceWithProvisioningRules(
 	t.Helper()
 
 	service := management.NewService(management.Options{
-		PrincipalCreator:              creator,
+		PrincipalCreator:              principals,
+		PrincipalFinder:               principals,
 		RoleCreator:                   roles,
 		RoleActionGranter:             roles,
 		PrincipalRoleAssigner:         roles,
@@ -1077,6 +1069,11 @@ type roleStore interface {
 	authkit.PrincipalRoleAssigner
 	authkit.PrincipalRoleUnassigner
 	authkit.PrincipalRoleAssignmentLister
+}
+
+type principalStore interface {
+	authkit.PrincipalCreator
+	authkit.PrincipalFinder
 }
 
 type provisioningRuleStore interface {

@@ -3,16 +3,11 @@ package apikey
 import (
 	"crypto/sha256"
 	"time"
-
-	"github.com/meigma/authkit"
 )
-
-// Provider identifies identities produced by API-token authentication.
-const Provider = "api-token"
 
 // IssueRequest describes a request to issue an opaque API token.
 type IssueRequest struct {
-	// PrincipalID identifies the principal the token should be linked to.
+	// PrincipalID identifies the principal the token should authenticate as.
 	PrincipalID string
 
 	// Name is an optional human-readable token label.
@@ -32,9 +27,18 @@ type IssuedToken struct {
 
 	// ExpiresAt is the time after which the token must no longer authenticate.
 	ExpiresAt time.Time
+}
 
-	// IdentityLink is the explicit identity-link request applications can store for the token.
-	IdentityLink authkit.LinkIdentityRequest
+// VerifiedToken describes a successfully verified API token.
+type VerifiedToken struct {
+	// ID is the stable lookup identifier embedded in the token.
+	ID string
+
+	// PrincipalID identifies the principal the token authenticates as.
+	PrincipalID string
+
+	// ExpiresAt is the time after which the token must no longer authenticate.
+	ExpiresAt time.Time
 }
 
 // TokenMetadata describes an API token without its secret material.

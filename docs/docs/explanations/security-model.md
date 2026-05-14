@@ -11,15 +11,15 @@ principals, and delegates policy decisions to an authorizer.
 
 ## API Tokens
 
-API tokens are opaque, revocable, storage-backed credentials.
+API tokens are opaque, revocable, storage-backed exchange credentials.
 
 authkit generates token IDs and secrets with high entropy. The plaintext token
 is returned only when issued. Storage adapters persist only the token secret
-hash, expiration, revocation state, and metadata.
+hash, principal ID, expiration, revocation state, and metadata.
 
 Token verification rejects malformed, unknown, expired, revoked, or mismatched
-tokens. Successful verification returns an `authkit.Identity`; it does not bypass
-principal resolution.
+tokens. Successful verification returns principal-bearing API-token metadata for
+an exchange service to issue a short-lived authkit access JWT.
 
 ## OIDC JWT Bearer Tokens
 

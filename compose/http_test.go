@@ -6,15 +6,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/meigma/authkit"
-	"github.com/meigma/authkit/apikey"
+	"github.com/meigma/authkit/accessjwt"
 	"github.com/meigma/authkit/compose"
 	"github.com/meigma/authkit/httpauth"
+	"github.com/meigma/authkit/internal/authtest"
 	"github.com/meigma/authkit/oidc"
 	"github.com/meigma/authkit/store/memory"
 )
@@ -45,6 +45,14 @@ func TestNewHTTPValidatesInputs(t *testing.T) {
 			want: "compose: authenticator spec 0 is required",
 		},
 		{
+			name: "rejects nil principal authenticator spec",
+			options: compose.HTTPOptions{
+				PrincipalAuthenticators: []compose.PrincipalAuthenticatorSpec{nil},
+				Authorizer:              testAuthorizer{},
+			},
+			want: "compose: principal authenticator spec 0 is required",
+		},
+		{
 			name: "wraps authenticator build errors",
 			options: compose.HTTPOptions{
 				Authenticators: []compose.AuthenticatorSpec{
@@ -56,6 +64,19 @@ func TestNewHTTPValidatesInputs(t *testing.T) {
 				Authorizer: testAuthorizer{},
 			},
 			want:   "compose: build authenticator 0: boom",
+			wantIs: boom,
+		},
+		{
+			name: "wraps principal authenticator build errors",
+			options: compose.HTTPOptions{
+				PrincipalAuthenticators: []compose.PrincipalAuthenticatorSpec{
+					principalAuthenticatorSpecFunc(func() (authkit.PrincipalAuthenticator, error) {
+						return nil, boom
+					}),
+				},
+				Authorizer: testAuthorizer{},
+			},
+			want:   "compose: build principal authenticator 0: boom",
 			wantIs: boom,
 		},
 		{
@@ -72,6 +93,20 @@ func TestNewHTTPValidatesInputs(t *testing.T) {
 				Authorizer: testAuthorizer{},
 			},
 			want: "compose: authenticator 0 built nil authenticator",
+		},
+		{
+			name: "rejects nil built principal authenticator",
+			options: compose.HTTPOptions{
+				PrincipalAuthenticators: []compose.PrincipalAuthenticatorSpec{
+					principalAuthenticatorSpecFunc(func() (authkit.PrincipalAuthenticator, error) {
+						var authenticator authkit.PrincipalAuthenticator
+
+						return authenticator, nil
+					}),
+				},
+				Authorizer: testAuthorizer{},
+			},
+			want: "compose: principal authenticator 0 built nil authenticator",
 		},
 		{
 			name: "wraps missing resolver error",
@@ -102,6 +137,34 @@ func TestNewHTTPValidatesInputs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNewHTTPWithAccessJWTDoesNotRequireResolver(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+	principal, err := store.CreatePrincipal(ctx, authkit.CreatePrincipalRequest{
+		Kind:        authkit.PrincipalKindService,
+		DisplayName: "notes service",
+	})
+	require.NoError(t, err)
+	issuer, verifier := newAccessJWTIssuerAndVerifier(t)
+	issued, err := issuer.IssueToken(ctx, accessjwt.IssueRequest{
+		PrincipalID: principal.ID,
+	})
+	require.NoError(t, err)
+	kit, err := compose.NewHTTP(compose.HTTPOptions{
+		PrincipalAuthenticators: []compose.PrincipalAuthenticatorSpec{
+			compose.AccessJWT(verifier, store),
+		},
+		Authorizer: testAuthorizer{},
+	})
+	require.NoError(t, err)
+
+	authentication, err := kit.Pipeline.Authenticate(ctx, requestWithBearer(issued.Plaintext))
+
+	require.NoError(t, err)
+	assert.Empty(t, authentication.Identity)
+	assert.Equal(t, principal.ID, authentication.Principal.ID)
 }
 
 func TestNewHTTPPreservesAuthenticatorOrder(t *testing.T) {
@@ -178,40 +241,6 @@ func TestNewHTTPAppliesMiddlewareOptions(t *testing.T) {
 	assert.Contains(t, recorder.Body.String(), "custom auth error")
 }
 
-func TestAPITokenSpecBuildsUsableAuthenticator(t *testing.T) {
-	ctx := context.Background()
-	store := memory.NewStore()
-	principal, err := store.CreatePrincipal(ctx, authkit.CreatePrincipalRequest{
-		Kind:        authkit.PrincipalKindService,
-		DisplayName: "test service",
-	})
-	require.NoError(t, err)
-	tokenService, err := apikey.NewService(store)
-	require.NoError(t, err)
-	issued, err := tokenService.IssueToken(ctx, apikey.IssueRequest{
-		PrincipalID: principal.ID,
-		Name:        "test token",
-		ExpiresAt:   time.Now().Add(time.Hour),
-	})
-	require.NoError(t, err)
-	_, err = store.LinkIdentity(ctx, issued.IdentityLink)
-	require.NoError(t, err)
-	kit, err := compose.NewHTTP(compose.HTTPOptions{
-		Authenticators: []compose.AuthenticatorSpec{
-			compose.APIToken(tokenService),
-		},
-		Resolver:   store,
-		Authorizer: testAuthorizer{},
-	})
-	require.NoError(t, err)
-
-	authentication, err := kit.Pipeline.Authenticate(ctx, requestWithBearer(issued.Plaintext))
-
-	require.NoError(t, err)
-	assert.Equal(t, apikey.Provider, authentication.Identity.Provider)
-	assert.Equal(t, principal.ID, authentication.Principal.ID)
-}
-
 func TestOIDCSpecBuildsAuthenticator(t *testing.T) {
 	source, err := oidc.NewStaticProviderSource()
 	require.NoError(t, err)
@@ -236,11 +265,6 @@ func TestHelperSpecsWrapConstructorErrors(t *testing.T) {
 		want string
 	}{
 		{
-			name: "API token service is required",
-			spec: compose.APIToken(nil),
-			want: "compose: build authenticator 0: apikey: service is required",
-		},
-		{
 			name: "OIDC provider source is required",
 			spec: compose.OIDC(nil),
 			want: "compose: build authenticator 0: oidc: provider source is required",
@@ -261,9 +285,49 @@ func TestHelperSpecsWrapConstructorErrors(t *testing.T) {
 	}
 }
 
+func TestAccessJWTSpecWrapsConstructorErrors(t *testing.T) {
+	_, verifier := newAccessJWTIssuerAndVerifier(t)
+	store := memory.NewStore()
+
+	tests := []struct {
+		name string
+		spec compose.PrincipalAuthenticatorSpec
+		want string
+	}{
+		{
+			name: "verifier is required",
+			spec: compose.AccessJWT(nil, store),
+			want: "compose: build principal authenticator 0: accessjwtauth: verifier is required",
+		},
+		{
+			name: "principal finder is required",
+			spec: compose.AccessJWT(verifier, nil),
+			want: "compose: build principal authenticator 0: accessjwtauth: principal finder is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := compose.NewHTTP(compose.HTTPOptions{
+				PrincipalAuthenticators: []compose.PrincipalAuthenticatorSpec{tt.spec},
+				Authorizer:              testAuthorizer{},
+			})
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
 type authenticatorSpecFunc func() (authkit.Authenticator, error)
 
 func (f authenticatorSpecFunc) BuildAuthenticator() (authkit.Authenticator, error) {
+	return f()
+}
+
+type principalAuthenticatorSpecFunc func() (authkit.PrincipalAuthenticator, error)
+
+func (f principalAuthenticatorSpecFunc) BuildPrincipalAuthenticator() (authkit.PrincipalAuthenticator, error) {
 	return f()
 }
 
@@ -321,4 +385,10 @@ func requestWithBearer(token string) *http.Request {
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	return req
+}
+
+func newAccessJWTIssuerAndVerifier(t *testing.T) (*accessjwt.Issuer, *accessjwt.Verifier) {
+	t.Helper()
+
+	return authtest.NewAccessJWTIssuerAndVerifier(t)
 }

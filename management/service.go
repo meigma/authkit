@@ -321,17 +321,22 @@ func (s *Service) LinkIdentity(
 	return identity, nil
 }
 
-// IssueAPIToken issues an API token and links its API-token identity.
+// IssueAPIToken issues an API token for an existing principal.
 func (s *Service) IssueAPIToken(ctx context.Context, req IssueAPITokenRequest) (IssuedAPIToken, error) {
 	if s.apiTokens == nil {
 		return IssuedAPIToken{}, errors.New("management: API tokens service is required")
 	}
-	if s.identityLinker == nil {
-		return IssuedAPIToken{}, errors.New("management: identity linker is required")
+	if s.principalFinder == nil {
+		return IssuedAPIToken{}, errors.New("management: principal finder is required")
+	}
+
+	principal, err := s.principalFinder.FindPrincipal(ctx, req.PrincipalID)
+	if err != nil {
+		return IssuedAPIToken{}, fmt.Errorf("management: find API token principal: %w", err)
 	}
 
 	issued, err := s.apiTokens.IssueToken(ctx, apikey.IssueRequest{
-		PrincipalID: req.PrincipalID,
+		PrincipalID: principal.ID,
 		Name:        req.Name,
 		ExpiresAt:   req.ExpiresAt,
 	})
@@ -339,18 +344,11 @@ func (s *Service) IssueAPIToken(ctx context.Context, req IssueAPITokenRequest) (
 		return IssuedAPIToken{}, fmt.Errorf("management: issue API token: %w", err)
 	}
 
-	identity, err := s.identityLinker.LinkIdentity(ctx, issued.IdentityLink)
-	if err != nil {
-		_ = s.apiTokens.RevokeToken(ctx, issued.ID)
-
-		return IssuedAPIToken{}, fmt.Errorf("management: link API token identity: %w", err)
-	}
-
 	return IssuedAPIToken{
-		ID:        issued.ID,
-		Plaintext: issued.Plaintext,
-		ExpiresAt: issued.ExpiresAt,
-		Identity:  identity,
+		ID:          issued.ID,
+		PrincipalID: principal.ID,
+		Plaintext:   issued.Plaintext,
+		ExpiresAt:   issued.ExpiresAt,
 	}, nil
 }
 

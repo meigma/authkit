@@ -15,7 +15,7 @@ succeeds.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `Provider` | `string` | Authority or credential class that produced the identity. API tokens use `api-token`; OIDC uses the issuer URL. |
+| `Provider` | `string` | Authority or credential class that produced the identity. OIDC uses the issuer URL. |
 | `Subject` | `string` | Provider-scoped subject. |
 | `CredentialID` | `string` | Concrete credential identifier when the authenticator exposes one. |
 | `Claims` | `map[string]any` | Optional verified metadata forwarded by the authenticator. |
