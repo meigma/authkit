@@ -8,7 +8,10 @@
         {{if .Paste.Syntax}}<span>{{.Paste.Syntax}}</span>{{end}}
       </p>
     </div>
-    <a class="button" href="/raw/{{.Paste.ID}}">Raw</a>
+    <div class="button-row">
+      <a class="button secondary" href="/p/{{.Paste.ID}}/edit">Edit</a>
+      <a class="button" href="/raw/{{.Paste.ID}}">Raw</a>
+    </div>
   </header>
   <pre><code>{{.Paste.Body}}</code></pre>
 </article>

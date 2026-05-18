@@ -24,6 +24,9 @@ type Paste struct {
 	// Syntax is an optional display label for the paste content type.
 	Syntax string
 
+	// OwnerPrincipalID is the authkit principal that owns the paste.
+	OwnerPrincipalID string
+
 	// CreatedAt is when the paste was created.
 	CreatedAt time.Time
 }
@@ -38,4 +41,34 @@ type CreatePasteRequest struct {
 
 	// Syntax is an optional display label for the paste content type.
 	Syntax string
+
+	// OwnerPrincipalID is the authkit principal that owns the paste.
+	OwnerPrincipalID string
+}
+
+// UpdatePasteRequest describes a paste update request.
+type UpdatePasteRequest struct {
+	// ID is the paste to update.
+	ID string
+
+	// Title is an optional human-readable paste title.
+	Title string
+
+	// Body is the required paste content.
+	Body string
+
+	// Syntax is an optional display label for the paste content type.
+	Syntax string
+
+	// OwnerPrincipalID is the authkit principal that owns the paste.
+	OwnerPrincipalID string
+}
+
+// DeletePasteRequest describes a paste deletion request.
+type DeletePasteRequest struct {
+	// ID is the paste to delete.
+	ID string
+
+	// OwnerPrincipalID is the authkit principal that owns the paste.
+	OwnerPrincipalID string
 }

@@ -14,6 +14,9 @@ var (
 
 	// ErrDuplicatePasteID indicates that a paste ID already exists in storage.
 	ErrDuplicatePasteID = errors.New("paste: duplicate paste ID")
+
+	// ErrOwnerRequired indicates that a paste owner principal ID is required.
+	ErrOwnerRequired = errors.New("paste: owner principal ID is required")
 )
 
 // BodyTooLargeError indicates that a paste body exceeds the configured byte limit.

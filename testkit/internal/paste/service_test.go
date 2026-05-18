@@ -15,6 +15,7 @@ import (
 
 const (
 	firstPasteID  = "paste-1"
+	ownerID       = "principal-owner"
 	secondPasteID = "paste-2"
 	maxTestBytes  = 5
 )
@@ -23,9 +24,10 @@ func TestServiceCreatesPaste(t *testing.T) {
 	service := newTestService(t, firstPasteID, fixedTime())
 
 	created, err := service.Create(context.Background(), paste.CreatePasteRequest{
-		Title:  "  Example paste  ",
-		Body:   "hello, pastebin",
-		Syntax: "  text  ",
+		Title:            "  Example paste  ",
+		Body:             "hello, pastebin",
+		Syntax:           "  text  ",
+		OwnerPrincipalID: "  " + ownerID + "  ",
 	})
 
 	require.NoError(t, err)
@@ -33,6 +35,7 @@ func TestServiceCreatesPaste(t *testing.T) {
 	assert.Equal(t, "Example paste", created.Title)
 	assert.Equal(t, "hello, pastebin", created.Body)
 	assert.Equal(t, "text", created.Syntax)
+	assert.Equal(t, ownerID, created.OwnerPrincipalID)
 	assert.Equal(t, fixedTime(), created.CreatedAt)
 
 	found, err := service.Read(context.Background(), firstPasteID)
@@ -40,23 +43,94 @@ func TestServiceCreatesPaste(t *testing.T) {
 	assert.Equal(t, created, found)
 }
 
+func TestServiceUpdatesPaste(t *testing.T) {
+	service := newTestService(t, firstPasteID, fixedTime())
+	created, err := service.Create(context.Background(), paste.CreatePasteRequest{
+		Title:            "Original",
+		Body:             "hello, pastebin",
+		Syntax:           "text",
+		OwnerPrincipalID: ownerID,
+	})
+	require.NoError(t, err)
+
+	updated, err := service.Update(context.Background(), paste.UpdatePasteRequest{
+		ID:               firstPasteID,
+		Title:            "  Updated  ",
+		Body:             "edited paste",
+		Syntax:           "  markdown  ",
+		OwnerPrincipalID: ownerID,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, firstPasteID, updated.ID)
+	assert.Equal(t, "Updated", updated.Title)
+	assert.Equal(t, "edited paste", updated.Body)
+	assert.Equal(t, "markdown", updated.Syntax)
+	assert.Equal(t, ownerID, updated.OwnerPrincipalID)
+	assert.Equal(t, created.CreatedAt, updated.CreatedAt)
+
+	found, err := service.Read(context.Background(), firstPasteID)
+	require.NoError(t, err)
+	assert.Equal(t, updated, found)
+}
+
+func TestServiceDeletesPaste(t *testing.T) {
+	service := newTestService(t, firstPasteID, fixedTime())
+	_, err := service.Create(context.Background(), paste.CreatePasteRequest{
+		Body:             "hello, pastebin",
+		OwnerPrincipalID: ownerID,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, service.Delete(context.Background(), paste.DeletePasteRequest{
+		ID:               firstPasteID,
+		OwnerPrincipalID: ownerID,
+	}))
+	_, err = service.Read(context.Background(), firstPasteID)
+
+	require.ErrorIs(t, err, paste.ErrPasteNotFound)
+}
+
 func TestServiceRejectsInvalidBodies(t *testing.T) {
 	tests := []struct {
 		name      string
+		operation string
 		body      string
 		assertErr func(*testing.T, error)
 	}{
 		{
-			name: "empty body",
-			body: " \n\t ",
+			name:      "create empty body",
+			operation: "create",
+			body:      " \n\t ",
 			assertErr: func(t *testing.T, err error) {
 				t.Helper()
-				assert.ErrorIs(t, err, paste.ErrEmptyBody)
+				require.ErrorIs(t, err, paste.ErrEmptyBody)
 			},
 		},
 		{
-			name: "body above limit",
-			body: "abcdef",
+			name:      "create body above limit",
+			operation: "create",
+			body:      "abcdef",
+			assertErr: func(t *testing.T, err error) {
+				t.Helper()
+				var bodyErr paste.BodyTooLargeError
+				require.ErrorAs(t, err, &bodyErr)
+				assert.Equal(t, maxTestBytes, bodyErr.MaxBytes)
+			},
+		},
+		{
+			name:      "update empty body",
+			operation: "update",
+			body:      " \n\t ",
+			assertErr: func(t *testing.T, err error) {
+				t.Helper()
+				require.ErrorIs(t, err, paste.ErrEmptyBody)
+			},
+		},
+		{
+			name:      "update body above limit",
+			operation: "update",
+			body:      "abcdef",
 			assertErr: func(t *testing.T, err error) {
 				t.Helper()
 				var bodyErr paste.BodyTooLargeError
@@ -70,21 +144,69 @@ func TestServiceRejectsInvalidBodies(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			service := newTestService(t, firstPasteID, fixedTime(), paste.WithMaxBodyBytes(maxTestBytes))
 
-			_, err := service.Create(context.Background(), paste.CreatePasteRequest{
-				Body: tt.body,
-			})
+			var err error
+			switch tt.operation {
+			case "create":
+				_, err = service.Create(context.Background(), paste.CreatePasteRequest{
+					Body:             tt.body,
+					OwnerPrincipalID: ownerID,
+				})
+			case "update":
+				_, createErr := service.Create(context.Background(), paste.CreatePasteRequest{
+					Body:             "abc",
+					OwnerPrincipalID: ownerID,
+				})
+				require.NoError(t, createErr)
+				_, err = service.Update(context.Background(), paste.UpdatePasteRequest{
+					ID:               firstPasteID,
+					Body:             tt.body,
+					OwnerPrincipalID: ownerID,
+				})
+			}
 
 			tt.assertErr(t, err)
 		})
 	}
 }
 
-func TestServiceReturnsMissingPasteError(t *testing.T) {
+func TestServiceRequiresOwner(t *testing.T) {
 	service := newTestService(t, firstPasteID, fixedTime())
+
+	_, createErr := service.Create(context.Background(), paste.CreatePasteRequest{Body: "hello"})
+	_, updateErr := service.Update(context.Background(), paste.UpdatePasteRequest{
+		ID:   firstPasteID,
+		Body: "hello",
+	})
+	deleteErr := service.Delete(context.Background(), paste.DeletePasteRequest{ID: firstPasteID})
+
+	require.ErrorIs(t, createErr, paste.ErrOwnerRequired)
+	require.ErrorIs(t, updateErr, paste.ErrOwnerRequired)
+	require.ErrorIs(t, deleteErr, paste.ErrOwnerRequired)
+}
+
+func TestServiceReturnsMissingPasteError(t *testing.T) {
+	service := newTestService(t, secondPasteID, fixedTime())
 
 	_, err := service.Read(context.Background(), "missing")
 
-	assert.ErrorIs(t, err, paste.ErrPasteNotFound)
+	require.ErrorIs(t, err, paste.ErrPasteNotFound)
+}
+
+func TestServiceReturnsMissingPasteErrorForUpdateAndDelete(t *testing.T) {
+	service := newTestService(t, firstPasteID, fixedTime())
+
+	_, updateErr := service.Update(context.Background(), paste.UpdatePasteRequest{
+		ID:               "missing",
+		Body:             "hello",
+		OwnerPrincipalID: ownerID,
+	})
+	deleteErr := service.Delete(context.Background(), paste.DeletePasteRequest{
+		ID:               "missing",
+		OwnerPrincipalID: ownerID,
+	})
+
+	require.ErrorIs(t, updateErr, paste.ErrPasteNotFound)
+	require.ErrorIs(t, deleteErr, paste.ErrPasteNotFound)
 }
 
 func TestServiceListsRecentPastesNewestFirst(t *testing.T) {
@@ -100,10 +222,16 @@ func TestServiceListsRecentPastesNewestFirst(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, err = service.Create(context.Background(), paste.CreatePasteRequest{Body: "older"})
+	_, err = service.Create(context.Background(), paste.CreatePasteRequest{
+		Body:             "older",
+		OwnerPrincipalID: ownerID,
+	})
 	require.NoError(t, err)
 	now = now.Add(time.Minute)
-	_, err = service.Create(context.Background(), paste.CreatePasteRequest{Body: "newer"})
+	_, err = service.Create(context.Background(), paste.CreatePasteRequest{
+		Body:             "newer",
+		OwnerPrincipalID: ownerID,
+	})
 	require.NoError(t, err)
 
 	recent, err := service.ListRecent(context.Background(), paste.DefaultRecentLimit)

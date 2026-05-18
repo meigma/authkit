@@ -62,6 +62,95 @@ func TestRuntimeRejectsDirectAPITokenAsProtectedBearer(t *testing.T) {
 	assert.Equal(t, -1, findSetCookie(t, recorder, CookieName).MaxAge)
 }
 
+func TestRuntimeAuthorizesPasteActions(t *testing.T) {
+	runtime := newTestRuntime(t)
+	result, err := runtime.ExchangeAPIToken(context.Background(), runtime.SeedAPIToken)
+	require.NoError(t, err)
+	authentication := authkit.Authentication{
+		AuthenticatorName: "test",
+		Principal:         result.Principal,
+	}
+
+	tests := []struct {
+		name      string
+		request   authkit.AuthorizationRequest
+		assertErr func(*testing.T, error)
+	}{
+		{
+			name: "create",
+			request: authkit.AuthorizationRequest{
+				Action:   ActionPasteCreate,
+				Resource: pasteResource(),
+			},
+			assertErr: func(t *testing.T, err error) {
+				t.Helper()
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "owner update",
+			request: authkit.AuthorizationRequest{
+				Action:   ActionPasteUpdate,
+				Resource: pasteResource(),
+				Facts: authkit.Facts{
+					PasteOwnerPrincipalIDFact: result.Principal.ID,
+				},
+			},
+			assertErr: func(t *testing.T, err error) {
+				t.Helper()
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "owner delete",
+			request: authkit.AuthorizationRequest{
+				Action:   ActionPasteDelete,
+				Resource: pasteResource(),
+				Facts: authkit.Facts{
+					PasteOwnerPrincipalIDFact: result.Principal.ID,
+				},
+			},
+			assertErr: func(t *testing.T, err error) {
+				t.Helper()
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "non-owner update",
+			request: authkit.AuthorizationRequest{
+				Action:   ActionPasteUpdate,
+				Resource: pasteResource(),
+				Facts: authkit.Facts{
+					PasteOwnerPrincipalIDFact: "principal-other",
+				},
+			},
+			assertErr: func(t *testing.T, err error) {
+				t.Helper()
+				require.ErrorIs(t, err, authkit.ErrUnauthorized)
+			},
+		},
+		{
+			name: "missing owner fact",
+			request: authkit.AuthorizationRequest{
+				Action:   ActionPasteDelete,
+				Resource: pasteResource(),
+			},
+			assertErr: func(t *testing.T, err error) {
+				t.Helper()
+				require.ErrorIs(t, err, authkit.ErrUnauthorized)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := runtime.AuthorizeAuthenticated(context.Background(), authentication, tt.request)
+
+			tt.assertErr(t, err)
+		})
+	}
+}
+
 func TestRuntimeRejectsInvalidAPITokenExchange(t *testing.T) {
 	runtime := newTestRuntime(t)
 
@@ -187,6 +276,13 @@ func findSetCookie(t *testing.T, recorder *httptest.ResponseRecorder, name strin
 
 func bearer(token string) string {
 	return "Bearer " + token
+}
+
+func pasteResource() authkit.Resource {
+	return authkit.Resource{
+		Type: "paste",
+		ID:   "paste-1",
+	}
 }
 
 func fixedTime() time.Time {

@@ -21,7 +21,7 @@ import (
 
 const (
 	concurrentMigrationCalls = 5
-	expectedMigrationRows    = 1
+	expectedMigrationRows    = 2
 	postgresReadyOccurrences = 2
 )
 
@@ -136,7 +136,7 @@ func assertMigrationRows(t *testing.T, pool *pgxpool.Pool) {
 	var migrationRows int
 	err := pool.QueryRow(
 		context.Background(),
-		`select count(*) from testkit_schema_migrations where version = 1`,
+		`select count(*) from testkit_schema_migrations where version in (1, 2)`,
 	).Scan(&migrationRows)
 	require.NoError(t, err)
 	assert.Equal(t, expectedMigrationRows, migrationRows)

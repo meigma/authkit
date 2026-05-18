@@ -14,6 +14,7 @@ import (
 
 const (
 	firstPasteID  = "paste-1"
+	ownerID       = "principal-owner"
 	recentLimit   = 2
 	secondPasteID = "paste-2"
 	thirdOffset   = 2
@@ -53,6 +54,53 @@ func Run(t *testing.T, newRepo func(*testing.T) paste.Repository) {
 		assert.ErrorIs(t, err, paste.ErrDuplicatePasteID)
 	})
 
+	t.Run("update replaces owned paste content", func(t *testing.T) {
+		repo := newRepo(t)
+		created := newPaste(firstPasteID, "Example", "hello", "text", firstTime())
+		updated := newPaste(firstPasteID, "Updated", "goodbye", "markdown", firstTime())
+
+		require.NoError(t, repo.Create(context.Background(), created))
+		require.NoError(t, repo.Update(context.Background(), updated))
+		found, err := repo.Find(context.Background(), firstPasteID)
+
+		require.NoError(t, err)
+		assert.Equal(t, updated, found)
+	})
+
+	t.Run("update rejects non-owner", func(t *testing.T) {
+		repo := newRepo(t)
+		created := newPaste(firstPasteID, "Example", "hello", "text", firstTime())
+		updated := created
+		updated.OwnerPrincipalID = "principal-other"
+		updated.Body = "changed"
+
+		require.NoError(t, repo.Create(context.Background(), created))
+		err := repo.Update(context.Background(), updated)
+
+		assert.ErrorIs(t, err, paste.ErrPasteNotFound)
+	})
+
+	t.Run("delete removes owned paste", func(t *testing.T) {
+		repo := newRepo(t)
+		created := newPaste(firstPasteID, "Example", "hello", "text", firstTime())
+
+		require.NoError(t, repo.Create(context.Background(), created))
+		require.NoError(t, repo.Delete(context.Background(), firstPasteID, ownerID))
+		_, err := repo.Find(context.Background(), firstPasteID)
+
+		assert.ErrorIs(t, err, paste.ErrPasteNotFound)
+	})
+
+	t.Run("delete rejects non-owner", func(t *testing.T) {
+		repo := newRepo(t)
+		created := newPaste(firstPasteID, "Example", "hello", "text", firstTime())
+
+		require.NoError(t, repo.Create(context.Background(), created))
+		err := repo.Delete(context.Background(), firstPasteID, "principal-other")
+
+		assert.ErrorIs(t, err, paste.ErrPasteNotFound)
+	})
+
 	t.Run("recent list is newest first and limited", func(t *testing.T) {
 		repo := newRepo(t)
 
@@ -74,11 +122,12 @@ func Run(t *testing.T, newRepo func(*testing.T) paste.Repository) {
 
 func newPaste(id string, title string, body string, syntax string, createdAt time.Time) paste.Paste {
 	return paste.Paste{
-		ID:        id,
-		Title:     title,
-		Body:      body,
-		Syntax:    syntax,
-		CreatedAt: createdAt,
+		ID:               id,
+		Title:            title,
+		Body:             body,
+		Syntax:           syntax,
+		OwnerPrincipalID: ownerID,
+		CreatedAt:        createdAt,
 	}
 }
 

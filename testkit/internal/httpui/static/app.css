@@ -67,6 +67,22 @@ button {
   cursor: pointer;
 }
 
+.button.secondary {
+  background: var(--panel);
+  color: var(--accent);
+}
+
+.button.secondary:hover {
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+
+.button-row,
+.form-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
 .button:hover,
 button:hover {
   background: var(--accent-strong);
@@ -131,6 +147,21 @@ h1 {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
+}
+
+.danger-form {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 0.5rem;
+}
+
+button.danger {
+  border-color: var(--error);
+  background: var(--error);
+}
+
+button.danger:hover {
+  background: color-mix(in srgb, var(--error) 82%, black);
 }
 
 .auth-form {
@@ -198,6 +229,8 @@ code {
   .site-header,
   .page-heading,
   .paste-header,
+  .button-row,
+  .form-actions,
   .paste-list li {
     align-items: stretch;
     flex-direction: column;

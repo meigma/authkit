@@ -12,4 +12,10 @@ type Repository interface {
 
 	// ListRecent returns recent pastes, newest first, up to limit.
 	ListRecent(ctx context.Context, limit int) ([]Paste, error)
+
+	// Update replaces an existing paste owned by paste.OwnerPrincipalID.
+	Update(ctx context.Context, paste Paste) error
+
+	// Delete removes a paste owned by ownerPrincipalID.
+	Delete(ctx context.Context, id string, ownerPrincipalID string) error
 }
