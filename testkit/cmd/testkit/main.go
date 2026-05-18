@@ -111,9 +111,14 @@ type stores struct {
 func newStores(ctx context.Context) (stores, func(), error) {
 	databaseURL := os.Getenv(databaseURLEnv)
 	if databaseURL == "" {
+		authStore := authmemory.NewStore()
+		if err := configureOIDCProvider(ctx, authStore, os.Getenv); err != nil {
+			return stores{}, nil, err
+		}
+
 		return stores{
 			pastes: testkitmemory.NewStore(),
-			auth:   authmemory.NewStore(),
+			auth:   authStore,
 		}, func() {}, nil
 	}
 
@@ -140,6 +145,11 @@ func newStores(ctx context.Context) (stores, func(), error) {
 	}
 	authStore, err := authpostgres.NewStore(pool)
 	if err != nil {
+		pool.Close()
+
+		return stores{}, nil, err
+	}
+	if err := configureOIDCProvider(ctx, authStore, os.Getenv); err != nil {
 		pool.Close()
 
 		return stores{}, nil, err
