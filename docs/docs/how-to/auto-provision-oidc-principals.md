@@ -1,12 +1,12 @@
 ---
-title: How To Exchange OIDC Tokens And Auto-Provision Principals
+title: How To Exchange OIDC JWTs And Auto-Provision Principals
 description: Verify OIDC JWTs, provision approved identities, and issue authkit access JWTs.
 ---
 
-# How To Exchange OIDC Tokens And Auto-Provision Principals
+# How To Exchange OIDC JWTs And Auto-Provision Principals
 
 Configure OIDC exchange when a trusted external JWT should become a short-lived
-authkit access JWT. OIDC tokens are proof material for an exchange route; they
+authkit access JWT. OIDC JWTs are proof material for an exchange route; they
 are not protected-resource credentials.
 
 The flow is:
@@ -231,7 +231,7 @@ roles explicitly for existing principals.
 
 ### Direct OIDC Tokens Are Rejected On Resource Routes
 
-That is expected. OIDC tokens are accepted only by your exchange route. Resource
+That is expected. OIDC JWTs are accepted only by your exchange route. Resource
 routes authenticate authkit access JWTs.
 
 ## Related

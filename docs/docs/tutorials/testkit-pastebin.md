@@ -13,7 +13,7 @@ exchange forms, stores a short-lived authkit access JWT in an app cookie, keeps
 paste reads public, and protects paste creation with the access JWT path.
 
 This tutorial follows the API-token exchange path. The same testkit authflow
-also validates OIDC token exchange for services that trust external JWTs.
+also validates OIDC JWT exchange for services that trust external JWTs.
 
 ## Run Testkit
 
@@ -72,6 +72,6 @@ exchange credential -> authkit access JWT -> Principal -> authorization decision
 For task-oriented setup guidance, see
 [Compose HTTP authentication](../how-to/compose-http-auth.md). For external JWT
 exchange, see
-[Exchange OIDC tokens and auto-provision principals](../how-to/auto-provision-oidc-principals.md).
+[Exchange OIDC JWTs and auto-provision principals](../how-to/auto-provision-oidc-principals.md).
 For the design behind these flows, see
 [Architecture](../explanations/architecture.md).
