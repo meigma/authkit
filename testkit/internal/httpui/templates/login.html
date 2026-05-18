@@ -19,9 +19,9 @@
 <form class="paste-form auth-form" method="post" action="/auth/oidc-token">
   <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
   <label>
-    OIDC bearer token
+    OIDC JWT
     <textarea name="oidc_token" rows="5" required autocomplete="off"></textarea>
   </label>
-  <button type="submit">Exchange OIDC token</button>
+  <button type="submit">Exchange OIDC JWT</button>
 </form>
 {{end}}

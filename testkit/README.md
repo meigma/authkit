@@ -29,11 +29,11 @@ testkit seed API token: ak_...
 Use that token on `/login`. The token is shown only at startup and expires after
 24 hours.
 
-The OIDC exchange form is present for validation, but the standalone CLI does
-not start a browser login flow. It accepts pasted JWTs from a trusted provider
-when OIDC environment variables are configured.
+The OIDC JWT exchange form is present for validation, but the standalone CLI
+does not start a browser login flow. It accepts pasted JWTs from a trusted
+provider when OIDC environment variables are configured.
 
-## OIDC token exchange
+## OIDC JWT exchange
 
 Set `TESTKIT_OIDC_ISSUER`, `TESTKIT_OIDC_JWKS_URL`, and
 `TESTKIT_OIDC_AUDIENCES` to trust one OIDC JWT issuer:
@@ -74,7 +74,7 @@ Without `TESTKIT_DATABASE_URL`, both paste data and authkit state are in memory.
 ## Routes
 
 - `GET /` lists recent pastes.
-- `GET /login` renders API-token and OIDC-token exchange forms.
+- `GET /login` renders API-token and OIDC JWT exchange forms.
 - `POST /auth/token` exchanges an API token and sets the temporary access cookie.
 - `POST /auth/oidc-token` exchanges a trusted OIDC JWT and sets the temporary access cookie.
 - `POST /logout` clears the temporary access cookie.

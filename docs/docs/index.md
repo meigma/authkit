@@ -21,7 +21,7 @@ becoming an identity provider, hosted login system, or policy framework.
   construct authenticators, the pipeline, or middleware yourself.
 - [Configure local roles](how-to/configure-local-roles.md) if you need
   action-based role authorization.
-- [Exchange OIDC tokens and auto-provision principals](how-to/auto-provision-oidc-principals.md)
+- [Exchange OIDC JWTs and auto-provision principals](how-to/auto-provision-oidc-principals.md)
   if trusted JWT identities should become authkit access JWTs.
 - [Supply authorization facts](how-to/supply-authorization-facts.md) if route
   authorization needs request, tenant, or loaded resource context.
