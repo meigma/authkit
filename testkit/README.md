@@ -30,8 +30,31 @@ Use that token on `/login`. The token is shown only at startup and expires after
 24 hours.
 
 The OIDC exchange form is present for validation, but the standalone CLI does
-not seed trusted OIDC providers. Tests configure provider trust directly around
-the same authflow runtime.
+not start a browser login flow. It accepts pasted JWTs from a trusted provider
+when OIDC environment variables are configured.
+
+## OIDC token exchange
+
+Set `TESTKIT_OIDC_ISSUER`, `TESTKIT_OIDC_JWKS_URL`, and
+`TESTKIT_OIDC_AUDIENCES` to trust one OIDC JWT issuer:
+
+```bash
+TESTKIT_OIDC_ISSUER='https://issuer.example' \
+TESTKIT_OIDC_JWKS_URL='https://issuer.example/.well-known/jwks.json' \
+TESTKIT_OIDC_AUDIENCES='testkit' \
+TESTKIT_OIDC_FORWARDED_CLAIMS='email,name' \
+go run ./testkit/cmd/testkit
+```
+
+Optional `TESTKIT_OIDC_SIGNING_ALGORITHMS` accepts a comma-separated list such
+as `RS256,ES256`; when omitted, authkit's provider default is used. Forwarded
+claims are comma-separated claim paths, with dots for nested claims such as
+`realm_access.roles`.
+
+After startup, open `/login`, paste a JWT from the configured issuer, and submit
+the OIDC form. The form exchanges the external JWT for an authkit access JWT in
+the temporary browser cookie. Direct OIDC JWTs are still rejected on paste
+routes.
 
 ## Persistence
 
