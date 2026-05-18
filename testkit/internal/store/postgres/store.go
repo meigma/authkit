@@ -36,12 +36,13 @@ func (s *Store) Create(ctx context.Context, created paste.Paste) error {
 
 	_, err := s.pool.Exec(
 		ctx,
-		`insert into testkit_pastes (id, title, body, syntax, created_at)
-		values ($1, $2, $3, $4, $5)`,
+		`insert into testkit_pastes (id, title, body, syntax, owner_principal_id, created_at)
+		values ($1, $2, $3, $4, $5, $6)`,
 		created.ID,
 		created.Title,
 		created.Body,
 		created.Syntax,
+		created.OwnerPrincipalID,
 		created.CreatedAt.UTC(),
 	)
 	if err != nil {
@@ -63,7 +64,7 @@ func (s *Store) Find(ctx context.Context, id string) (paste.Paste, error) {
 
 	found, err := scanPaste(s.pool.QueryRow(
 		ctx,
-		`select id, title, body, syntax, created_at
+		`select id, title, body, syntax, owner_principal_id, created_at
 		from testkit_pastes
 		where id = $1`,
 		id,
@@ -78,6 +79,55 @@ func (s *Store) Find(ctx context.Context, id string) (paste.Paste, error) {
 	return found, nil
 }
 
+// Update replaces an existing paste owned by updated.OwnerPrincipalID.
+func (s *Store) Update(ctx context.Context, updated paste.Paste) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	tag, err := s.pool.Exec(
+		ctx,
+		`update testkit_pastes
+		set title = $3, body = $4, syntax = $5
+		where id = $1 and owner_principal_id = $2`,
+		updated.ID,
+		updated.OwnerPrincipalID,
+		updated.Title,
+		updated.Body,
+		updated.Syntax,
+	)
+	if err != nil {
+		return fmt.Errorf("testkit postgres: update paste: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return paste.ErrPasteNotFound
+	}
+
+	return nil
+}
+
+// Delete removes a paste owned by ownerPrincipalID.
+func (s *Store) Delete(ctx context.Context, id string, ownerPrincipalID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	tag, err := s.pool.Exec(
+		ctx,
+		`delete from testkit_pastes where id = $1 and owner_principal_id = $2`,
+		id,
+		ownerPrincipalID,
+	)
+	if err != nil {
+		return fmt.Errorf("testkit postgres: delete paste: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return paste.ErrPasteNotFound
+	}
+
+	return nil
+}
+
 // ListRecent returns recent pastes, newest first, up to limit.
 func (s *Store) ListRecent(ctx context.Context, limit int) ([]paste.Paste, error) {
 	if err := ctx.Err(); err != nil {
@@ -89,7 +139,7 @@ func (s *Store) ListRecent(ctx context.Context, limit int) ([]paste.Paste, error
 
 	rows, err := s.pool.Query(
 		ctx,
-		`select id, title, body, syntax, created_at
+		`select id, title, body, syntax, owner_principal_id, created_at
 		from testkit_pastes
 		order by created_at desc, id asc
 		limit $1`,
@@ -126,6 +176,7 @@ func scanPaste(row scanner) (paste.Paste, error) {
 		&found.Title,
 		&found.Body,
 		&found.Syntax,
+		&found.OwnerPrincipalID,
 		&found.CreatedAt,
 	); err != nil {
 		return paste.Paste{}, err

@@ -35,6 +35,18 @@ const (
 	// AccessTokenTTL is the lifetime of access JWTs issued by testkit.
 	AccessTokenTTL = 15 * time.Minute
 
+	// ActionPasteCreate is the authorization action for creating pastes.
+	ActionPasteCreate = "paste.create"
+
+	// ActionPasteUpdate is the authorization action for updating pastes.
+	ActionPasteUpdate = "paste.update"
+
+	// ActionPasteDelete is the authorization action for deleting pastes.
+	ActionPasteDelete = "paste.delete"
+
+	// PasteOwnerPrincipalIDFact identifies the authorization fact containing a paste owner principal ID.
+	PasteOwnerPrincipalIDFact authkit.FactKey = "paste.owner_principal_id"
+
 	accessJWTIssuer        = "https://testkit.local/authkit"
 	accessJWTAudience      = "testkit"
 	accessJWTKeyID         = "testkit-dev-access-key"
@@ -62,6 +74,8 @@ type Store interface {
 type Runtime struct {
 	// Middleware authenticates requests carrying authkit access JWTs.
 	Middleware *httpauth.Middleware
+
+	pipeline *authkit.Pipeline
 
 	// Exchanger exchanges opaque API tokens for authkit access JWTs.
 	Exchanger *exchange.APITokenExchanger
@@ -181,7 +195,7 @@ func NewRuntime(ctx context.Context, store Store, opts ...Option) (*Runtime, err
 		PrincipalAuthenticators: []compose.PrincipalAuthenticatorSpec{
 			compose.AccessJWT(accessVerifier, store),
 		},
-		Authorizer: allowAuthorizer{},
+		Authorizer: pasteAuthorizer{},
 		MiddlewareOptions: []httpauth.Option{
 			httpauth.WithErrorRenderer(renderAuthError),
 		},
@@ -192,6 +206,7 @@ func NewRuntime(ctx context.Context, store Store, opts ...Option) (*Runtime, err
 
 	return &Runtime{
 		Middleware:            composed.Middleware,
+		pipeline:              composed.Pipeline,
 		Exchanger:             exchanger,
 		IdentityExchanger:     identityExchanger,
 		OIDCVerifier:          oidcVerifier,
@@ -237,6 +252,19 @@ func (r *Runtime) ExchangeOIDCToken(
 // Authenticate authenticates requests carrying authkit access JWTs.
 func (r *Runtime) Authenticate(next http.Handler) http.Handler {
 	return r.Middleware.Authenticate(next)
+}
+
+// AuthorizeAuthenticated evaluates authorization for an already authenticated request.
+func (r *Runtime) AuthorizeAuthenticated(
+	ctx context.Context,
+	authentication authkit.Authentication,
+	authorizationRequest authkit.AuthorizationRequest,
+) (authkit.Authorization, error) {
+	if r == nil || r.pipeline == nil {
+		return authkit.Authorization{}, errors.New("authflow: runtime pipeline is required")
+	}
+
+	return r.pipeline.AuthorizeAuthenticated(ctx, authentication, authorizationRequest)
 }
 
 // SetAccessCookie writes the temporary testkit access JWT cookie.
@@ -396,12 +424,41 @@ func renderAuthError(w http.ResponseWriter, req *http.Request, err error) {
 	http.Error(w, http.StatusText(status), status)
 }
 
-type allowAuthorizer struct{}
+type pasteAuthorizer struct{}
 
-func (allowAuthorizer) Can(ctx context.Context, _ authkit.AuthorizationCheck) (authkit.Decision, error) {
+func (pasteAuthorizer) Can(ctx context.Context, check authkit.AuthorizationCheck) (authkit.Decision, error) {
 	if err := ctx.Err(); err != nil {
 		return authkit.Decision{}, err
 	}
 
-	return authkit.Decision{Allowed: true}, nil
+	switch check.Action {
+	case ActionPasteCreate:
+		return allow(), nil
+	case ActionPasteUpdate, ActionPasteDelete:
+		owner := ownerPrincipalID(check.Facts)
+		if owner != "" && owner == check.Principal.ID {
+			return allow(), nil
+		}
+
+		return deny("principal does not own paste"), nil
+	default:
+		return deny("unsupported paste action"), nil
+	}
+}
+
+func ownerPrincipalID(facts authkit.Facts) string {
+	owner, _ := facts[PasteOwnerPrincipalIDFact].(string)
+
+	return owner
+}
+
+func allow() authkit.Decision {
+	return authkit.Decision{Allowed: true}
+}
+
+func deny(reason string) authkit.Decision {
+	return authkit.Decision{
+		Allowed: false,
+		Reason:  reason,
+	}
 }

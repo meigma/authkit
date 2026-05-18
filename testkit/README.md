@@ -5,7 +5,8 @@
 The current slice uses authkit exchange paths for paste creation. Reading pastes
 remains public; creating pastes requires exchanging the startup API token or a
 trusted OIDC JWT for a short-lived authkit access JWT carried in a temporary app
-cookie.
+cookie. Editing and deleting pastes requires the same access JWT and is limited
+to the principal that created the paste.
 
 ## Run
 
@@ -57,10 +58,13 @@ Without `TESTKIT_DATABASE_URL`, both paste data and authkit state are in memory.
 - `GET /new` renders the create form for authenticated browsers.
 - `POST /pastes` creates a paste for authenticated browsers and redirects to its page.
 - `GET /p/{id}` renders a paste.
+- `GET /p/{id}/edit` renders the owner-only edit form.
+- `POST /p/{id}/edit` updates an owner-owned paste.
+- `POST /p/{id}/delete` deletes an owner-owned paste.
 - `GET /raw/{id}` returns the paste body as `text/plain`.
 
 ## Current Scope
 
 The browser cookie is a temporary testkit transport for authkit access JWTs.
-Ownership, edit/delete flows, refresh tokens, hosted OIDC login, richer session
-management, and API endpoints are intentionally deferred.
+Refresh tokens, hosted OIDC login, richer session management, and API endpoints
+are intentionally deferred.

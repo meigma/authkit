@@ -89,6 +89,10 @@ func WithMaxBodyBytes(maxBytes int) Option {
 
 // Create validates and stores a new paste.
 func (s *Service) Create(ctx context.Context, req CreatePasteRequest) (Paste, error) {
+	ownerPrincipalID := strings.TrimSpace(req.OwnerPrincipalID)
+	if ownerPrincipalID == "" {
+		return Paste{}, ErrOwnerRequired
+	}
 	if strings.TrimSpace(req.Body) == "" {
 		return Paste{}, ErrEmptyBody
 	}
@@ -106,17 +110,75 @@ func (s *Service) Create(ctx context.Context, req CreatePasteRequest) (Paste, er
 	}
 
 	created := Paste{
-		ID:        id,
-		Title:     strings.TrimSpace(req.Title),
-		Body:      req.Body,
-		Syntax:    strings.TrimSpace(req.Syntax),
-		CreatedAt: s.clock().UTC(),
+		ID:               id,
+		Title:            strings.TrimSpace(req.Title),
+		Body:             req.Body,
+		Syntax:           strings.TrimSpace(req.Syntax),
+		OwnerPrincipalID: ownerPrincipalID,
+		CreatedAt:        s.clock().UTC(),
 	}
 	if err := s.repo.Create(ctx, created); err != nil {
 		return Paste{}, fmt.Errorf("paste: store paste: %w", err)
 	}
 
 	return created, nil
+}
+
+// Update validates and replaces an existing paste.
+func (s *Service) Update(ctx context.Context, req UpdatePasteRequest) (Paste, error) {
+	id := strings.TrimSpace(req.ID)
+	if id == "" {
+		return Paste{}, ErrPasteNotFound
+	}
+	ownerPrincipalID := strings.TrimSpace(req.OwnerPrincipalID)
+	if ownerPrincipalID == "" {
+		return Paste{}, ErrOwnerRequired
+	}
+	if strings.TrimSpace(req.Body) == "" {
+		return Paste{}, ErrEmptyBody
+	}
+	if len(req.Body) > s.maxBodyBytes {
+		return Paste{}, BodyTooLargeError{MaxBytes: s.maxBodyBytes}
+	}
+
+	existing, err := s.repo.Find(ctx, id)
+	if err != nil {
+		return Paste{}, fmt.Errorf("paste: find paste: %w", err)
+	}
+	if existing.OwnerPrincipalID != ownerPrincipalID {
+		return Paste{}, ErrPasteNotFound
+	}
+
+	updated := Paste{
+		ID:               existing.ID,
+		Title:            strings.TrimSpace(req.Title),
+		Body:             req.Body,
+		Syntax:           strings.TrimSpace(req.Syntax),
+		OwnerPrincipalID: existing.OwnerPrincipalID,
+		CreatedAt:        existing.CreatedAt,
+	}
+	if err := s.repo.Update(ctx, updated); err != nil {
+		return Paste{}, fmt.Errorf("paste: update paste: %w", err)
+	}
+
+	return updated, nil
+}
+
+// Delete removes a paste owned by req.OwnerPrincipalID.
+func (s *Service) Delete(ctx context.Context, req DeletePasteRequest) error {
+	id := strings.TrimSpace(req.ID)
+	if id == "" {
+		return ErrPasteNotFound
+	}
+	ownerPrincipalID := strings.TrimSpace(req.OwnerPrincipalID)
+	if ownerPrincipalID == "" {
+		return ErrOwnerRequired
+	}
+	if err := s.repo.Delete(ctx, id, ownerPrincipalID); err != nil {
+		return fmt.Errorf("paste: delete paste: %w", err)
+	}
+
+	return nil
 }
 
 // Read returns a paste by ID.

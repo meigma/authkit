@@ -23,6 +23,7 @@ type templateSet struct {
 
 func newTemplateSet() (*templateSet, error) {
 	pageFiles := map[string]string{
+		pageEdit:  "templates/edit.html",
 		pageError: "templates/error.html",
 		pageIndex: "templates/index.html",
 		pageLogin: "templates/login.html",

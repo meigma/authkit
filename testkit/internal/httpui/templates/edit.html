@@ -1,0 +1,34 @@
+{{define "page"}}
+<section class="page-heading">
+  <h1>Edit paste</h1>
+  <a class="button secondary" href="/p/{{.Paste.ID}}">Cancel</a>
+</section>
+
+{{if .Error}}
+  <p class="error" role="alert">{{.Error}}</p>
+{{end}}
+
+<form class="paste-form" method="post" action="/p/{{.Paste.ID}}/edit">
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+  <label>
+    Title
+    <input name="title" value="{{.Form.Title}}" maxlength="120" autocomplete="off">
+  </label>
+  <label>
+    Syntax
+    <input name="syntax" value="{{.Form.Syntax}}" maxlength="40" autocomplete="off" placeholder="text">
+  </label>
+  <label>
+    Body
+    <textarea name="body" required autofocus>{{.Form.Body}}</textarea>
+  </label>
+  <div class="form-actions">
+    <button type="submit">Save changes</button>
+  </div>
+</form>
+
+<form class="danger-form" method="post" action="/p/{{.Paste.ID}}/delete">
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+  <button class="danger" type="submit">Delete paste</button>
+</form>
+{{end}}

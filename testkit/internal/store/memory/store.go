@@ -62,6 +62,42 @@ func (s *Store) Find(ctx context.Context, id string) (paste.Paste, error) {
 	return found, nil
 }
 
+// Update replaces an existing paste owned by updated.OwnerPrincipalID.
+func (s *Store) Update(ctx context.Context, updated paste.Paste) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	found, exists := s.pastes[updated.ID]
+	if !exists || found.OwnerPrincipalID != updated.OwnerPrincipalID {
+		return paste.ErrPasteNotFound
+	}
+	s.pastes[updated.ID] = updated
+
+	return nil
+}
+
+// Delete removes a paste owned by ownerPrincipalID.
+func (s *Store) Delete(ctx context.Context, id string, ownerPrincipalID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	found, exists := s.pastes[id]
+	if !exists || found.OwnerPrincipalID != ownerPrincipalID {
+		return paste.ErrPasteNotFound
+	}
+	delete(s.pastes, id)
+
+	return nil
+}
+
 // ListRecent returns recent pastes, newest first, up to limit.
 func (s *Store) ListRecent(ctx context.Context, limit int) ([]paste.Paste, error) {
 	if err := ctx.Err(); err != nil {

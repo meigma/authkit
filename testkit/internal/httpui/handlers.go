@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/meigma/authkit"
+	"github.com/meigma/authkit/httpauth"
 	"github.com/meigma/authkit/testkit/internal/authflow"
 	"github.com/meigma/authkit/testkit/internal/paste"
 )
@@ -20,6 +21,7 @@ const (
 	formBodyOverhead  = 8 * 1024
 	loginFormMaxBytes = 16 * 1024
 	pageError         = "error"
+	pageEdit          = "edit"
 	pageIndex         = "index"
 	pageLogin         = "login"
 	pageNew           = "new"
@@ -160,6 +162,11 @@ func (s *Server) handleLogout(w http.ResponseWriter, req *http.Request) {
 }
 
 func (s *Server) handleCreate(w http.ResponseWriter, req *http.Request) {
+	authentication, ok := s.authenticationFromRequest(w, req)
+	if !ok {
+		return
+	}
+
 	req.Body = http.MaxBytesReader(w, req.Body, int64(paste.DefaultMaxBodyBytes+formBodyOverhead))
 	if err := req.ParseForm(); err != nil {
 		s.renderNew(w, req, http.StatusBadRequest, pasteForm{}, "Could not read paste form.")
@@ -171,6 +178,12 @@ func (s *Server) handleCreate(w http.ResponseWriter, req *http.Request) {
 
 		return
 	}
+	if !s.authorize(w, req, authentication, authkit.AuthorizationRequest{
+		Action:   authflow.ActionPasteCreate,
+		Resource: pasteResource(""),
+	}) {
+		return
+	}
 
 	form := pasteForm{
 		Title:  req.PostFormValue("title"),
@@ -178,9 +191,10 @@ func (s *Server) handleCreate(w http.ResponseWriter, req *http.Request) {
 		Syntax: req.PostFormValue("syntax"),
 	}
 	created, err := s.pastes.Create(req.Context(), paste.CreatePasteRequest{
-		Title:  form.Title,
-		Body:   form.Body,
-		Syntax: form.Syntax,
+		Title:            form.Title,
+		Body:             form.Body,
+		Syntax:           form.Syntax,
+		OwnerPrincipalID: authentication.Principal.ID,
 	})
 	if err != nil {
 		s.renderCreateError(w, req, form, err)
@@ -205,6 +219,106 @@ func (s *Server) handlePaste(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
+func (s *Server) handleEdit(w http.ResponseWriter, req *http.Request) {
+	authentication, ok := s.authenticationFromRequest(w, req)
+	if !ok {
+		return
+	}
+	found, ok := s.readPaste(w, req)
+	if !ok {
+		return
+	}
+	if !s.authorize(w, req, authentication, pasteAuthorizationRequest(authflow.ActionPasteUpdate, found)) {
+		return
+	}
+
+	s.renderEdit(w, req, http.StatusOK, found, pasteFormFromPaste(found), "")
+}
+
+func (s *Server) handleUpdate(w http.ResponseWriter, req *http.Request) {
+	authentication, ok := s.authenticationFromRequest(w, req)
+	if !ok {
+		return
+	}
+
+	req.Body = http.MaxBytesReader(w, req.Body, int64(paste.DefaultMaxBodyBytes+formBodyOverhead))
+	if err := req.ParseForm(); err != nil {
+		s.renderError(w, http.StatusBadRequest, "Could not read paste form.")
+
+		return
+	}
+	if err := s.csrf.validate(req); err != nil {
+		s.renderError(w, http.StatusForbidden, "Could not validate form.")
+
+		return
+	}
+
+	found, ok := s.readPaste(w, req)
+	if !ok {
+		return
+	}
+	if !s.authorize(w, req, authentication, pasteAuthorizationRequest(authflow.ActionPasteUpdate, found)) {
+		return
+	}
+
+	form := pasteForm{
+		Title:  req.PostFormValue("title"),
+		Body:   req.PostFormValue("body"),
+		Syntax: req.PostFormValue("syntax"),
+	}
+	updated, err := s.pastes.Update(req.Context(), paste.UpdatePasteRequest{
+		ID:               found.ID,
+		Title:            form.Title,
+		Body:             form.Body,
+		Syntax:           form.Syntax,
+		OwnerPrincipalID: authentication.Principal.ID,
+	})
+	if err != nil {
+		s.renderUpdateError(w, req, found, form, err)
+
+		return
+	}
+
+	http.Redirect(w, req, pastePath(updated.ID), http.StatusSeeOther)
+}
+
+func (s *Server) handleDelete(w http.ResponseWriter, req *http.Request) {
+	authentication, ok := s.authenticationFromRequest(w, req)
+	if !ok {
+		return
+	}
+
+	req.Body = http.MaxBytesReader(w, req.Body, loginFormMaxBytes)
+	if err := req.ParseForm(); err != nil {
+		s.renderError(w, http.StatusBadRequest, "Could not read delete form.")
+
+		return
+	}
+	if err := s.csrf.validate(req); err != nil {
+		s.renderError(w, http.StatusForbidden, "Could not validate form.")
+
+		return
+	}
+
+	found, ok := s.readPaste(w, req)
+	if !ok {
+		return
+	}
+	if !s.authorize(w, req, authentication, pasteAuthorizationRequest(authflow.ActionPasteDelete, found)) {
+		return
+	}
+	if err := s.pastes.Delete(req.Context(), paste.DeletePasteRequest{
+		ID:               found.ID,
+		OwnerPrincipalID: authentication.Principal.ID,
+	}); err != nil {
+		s.renderDeleteError(w, err)
+
+		return
+	}
+
+	http.Redirect(w, req, "/", http.StatusSeeOther)
+}
+
 func (s *Server) handleRaw(w http.ResponseWriter, req *http.Request) {
 	found, err := s.pastes.Read(req.Context(), req.PathValue(pasteIDPathValue))
 	if err != nil {
@@ -222,6 +336,47 @@ func (s *Server) handleRaw(w http.ResponseWriter, req *http.Request) {
 	if _, err := w.Write([]byte(found.Body)); err != nil {
 		return
 	}
+}
+
+func (s *Server) readPaste(w http.ResponseWriter, req *http.Request) (paste.Paste, bool) {
+	found, err := s.pastes.Read(req.Context(), req.PathValue(pasteIDPathValue))
+	if err != nil {
+		s.renderReadError(w, err)
+
+		return paste.Paste{}, false
+	}
+
+	return found, true
+}
+
+func (s *Server) authenticationFromRequest(
+	w http.ResponseWriter,
+	req *http.Request,
+) (authkit.Authentication, bool) {
+	authentication, ok := httpauth.AuthenticationFromContext(req.Context())
+	if !ok {
+		s.renderError(w, http.StatusInternalServerError, "Authentication context is missing.")
+
+		return authkit.Authentication{}, false
+	}
+
+	return authentication, true
+}
+
+func (s *Server) authorize(
+	w http.ResponseWriter,
+	req *http.Request,
+	authentication authkit.Authentication,
+	authorizationRequest authkit.AuthorizationRequest,
+) bool {
+	_, err := s.auth.AuthorizeAuthenticated(req.Context(), authentication, authorizationRequest)
+	if err != nil {
+		s.renderAuthorizationError(w, req, err)
+
+		return false
+	}
+
+	return true
 }
 
 func (s *Server) withAccessCookie(next http.Handler) http.Handler {
@@ -246,6 +401,31 @@ func (s *Server) withAccessCookie(next http.Handler) http.Handler {
 	})
 }
 
+func pasteAuthorizationRequest(action string, found paste.Paste) authkit.AuthorizationRequest {
+	return authkit.AuthorizationRequest{
+		Action:   action,
+		Resource: pasteResource(found.ID),
+		Facts: authkit.Facts{
+			authflow.PasteOwnerPrincipalIDFact: found.OwnerPrincipalID,
+		},
+	}
+}
+
+func pasteResource(id string) authkit.Resource {
+	return authkit.Resource{
+		Type: "paste",
+		ID:   id,
+	}
+}
+
+func pasteFormFromPaste(found paste.Paste) pasteForm {
+	return pasteForm{
+		Title:  found.Title,
+		Body:   found.Body,
+		Syntax: found.Syntax,
+	}
+}
+
 func (s *Server) renderCreateError(w http.ResponseWriter, req *http.Request, form pasteForm, err error) {
 	switch {
 	case errors.Is(err, paste.ErrEmptyBody):
@@ -255,6 +435,51 @@ func (s *Server) renderCreateError(w http.ResponseWriter, req *http.Request, for
 	default:
 		s.renderError(w, http.StatusInternalServerError, "Could not create paste.")
 	}
+}
+
+func (s *Server) renderUpdateError(
+	w http.ResponseWriter,
+	req *http.Request,
+	found paste.Paste,
+	form pasteForm,
+	err error,
+) {
+	switch {
+	case errors.Is(err, paste.ErrEmptyBody):
+		s.renderEdit(w, req, http.StatusBadRequest, found, form, "Paste body is required.")
+	case errors.Is(err, paste.ErrPasteNotFound):
+		s.renderError(w, http.StatusNotFound, "Paste not found.")
+	case isBodyTooLarge(err):
+		s.renderEdit(w, req, http.StatusRequestEntityTooLarge, found, form, "Paste body is too large.")
+	default:
+		s.renderError(w, http.StatusInternalServerError, "Could not update paste.")
+	}
+}
+
+func (s *Server) renderDeleteError(w http.ResponseWriter, err error) {
+	if errors.Is(err, paste.ErrPasteNotFound) {
+		s.renderError(w, http.StatusNotFound, "Paste not found.")
+
+		return
+	}
+
+	s.renderError(w, http.StatusInternalServerError, "Could not delete paste.")
+}
+
+func (s *Server) renderAuthorizationError(w http.ResponseWriter, req *http.Request, err error) {
+	if errors.Is(err, authkit.ErrUnauthenticated) || errors.Is(err, authkit.ErrUnresolvedIdentity) {
+		authflow.ClearAccessCookie(w)
+		http.Redirect(w, req, authflow.LoginPath, http.StatusSeeOther)
+
+		return
+	}
+	if errors.Is(err, authkit.ErrUnauthorized) {
+		s.renderError(w, http.StatusForbidden, http.StatusText(http.StatusForbidden))
+
+		return
+	}
+
+	s.renderError(w, http.StatusInternalServerError, "Authorization failed.")
 }
 
 func (s *Server) renderExchangeError(w http.ResponseWriter, req *http.Request, err error) {
@@ -303,6 +528,30 @@ func (s *Server) renderNew(
 
 	s.render(w, status, pageNew, pageData{
 		Title:     "New paste",
+		Form:      form,
+		CSRFToken: token,
+		Error:     message,
+	})
+}
+
+func (s *Server) renderEdit(
+	w http.ResponseWriter,
+	req *http.Request,
+	status int,
+	found paste.Paste,
+	form pasteForm,
+	message string,
+) {
+	token, err := s.csrf.token(w, req)
+	if err != nil {
+		s.renderError(w, http.StatusInternalServerError, "Could not prepare form.")
+
+		return
+	}
+
+	s.render(w, status, pageEdit, pageData{
+		Title:     "Edit paste",
+		Paste:     found,
 		Form:      form,
 		CSRFToken: token,
 		Error:     message,
