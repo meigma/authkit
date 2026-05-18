@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.0](https://github.com/meigma/authkit/compare/v0.3.0...v0.4.0) (2026-05-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **oidc:** migrate OIDC to explicit exchange ([#47](https://github.com/meigma/authkit/issues/47))
+
+### Features
+
+* **authkit:** add JWT-first access token flow ([#45](https://github.com/meigma/authkit/issues/45)) ([8e15d75](https://github.com/meigma/authkit/commit/8e15d755324dffb39f36ab33d882e992864774f7))
+* **oidc:** migrate OIDC to explicit exchange ([#47](https://github.com/meigma/authkit/issues/47)) ([86487bf](https://github.com/meigma/authkit/commit/86487bfebd1bccd97d662c614d9adf49b87a5f92))
+* **onboarding:** add identity onboarding foundation ([#41](https://github.com/meigma/authkit/issues/41)) ([6ce2e73](https://github.com/meigma/authkit/commit/6ce2e73490687716837c328c875d31a66dbadf51))
+* **passkey:** add WebAuthn passkey ceremony package ([#51](https://github.com/meigma/authkit/issues/51)) ([217f0d4](https://github.com/meigma/authkit/commit/217f0d4e6d9c0cf71e6180c55b4317793c86f702))
+* **testkit:** add API-token login flow ([#46](https://github.com/meigma/authkit/issues/46)) ([940506c](https://github.com/meigma/authkit/commit/940506c69a83e653bc4a9d20f8f656fc6f62b5a3))
+* **testkit:** add paste ownership authorization ([#48](https://github.com/meigma/authkit/issues/48)) ([2f6ee1c](https://github.com/meigma/authkit/commit/2f6ee1cf94e559eeeaa14c68e497258a3abf2f83))
+* **testkit:** configure OIDC provider from env ([#49](https://github.com/meigma/authkit/issues/49)) ([9ea7a9e](https://github.com/meigma/authkit/commit/9ea7a9edc8f97515f78fc79d0def24a93f4d5a5c))
+
 ## [0.3.0](https://github.com/meigma/authkit/compare/v0.2.0...v0.3.0) (2026-05-11)
 
 
